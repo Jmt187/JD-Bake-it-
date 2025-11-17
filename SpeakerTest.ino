@@ -1,44 +1,38 @@
-#include <NeoSWSerial.h>
+#include "Arduino.h"
+#include "SoftwareSerial.h"
+#include "NeoSWSerial.h"
 #include "DFRobotDFPlayerMini.h"
 
-int led = 7;
-int startButton = 8;
-
 // Use pins 2 and 3 to communicate with DFPlayer Mini
-static const uint8_t PIN_MP3_TX = 2;
-static const uint8_t PIN_MP3_RX = 3;
+static const uint8_t PIN_MP3_TX = 7; // Connects to module's RX
+static const uint8_t PIN_MP3_RX = 6; // Connects to module's TX
 NeoSWSerial neoSerial(PIN_MP3_RX, PIN_MP3_TX);
+int button = 9;
+int led = 8;
 
 // Create the Player object
-DFRobotDFPlayerMini player;
+DFRobotDFPlayerMini myDFPlayer;
 
-void setup()
-{
-    pinMode(led, OUTPUT);
-    pinMode(startButton, INPUT);
-    
-    // Init USB serial port for debugging
-    Serial.begin(9600);
-    
-    // Init serial port for DFPlayer Mini
-    neoSerial.begin(9600);
-    
-    if (player.begin(neoSerial))
-    {
-        Serial.println("OK");
+void setup() {
+  Serial.begin(9600);
+  neoSerial.begin(9600);
+  myDFPlayer.begin(neoSerial);
+  myDFPlayer.setTimeOut(5000);
 
-        // Set volume to maximum (0 to 30).
-        player.volume(30);
-        // Play the first MP3 file on the SD card
-        player.play(1);
-    } 
-    else 
-    {
-        Serial.println("Connecting to DFPlayer Mini failed!");
-    }
+  pinMode(button, INPUT);
+  pinMode(led, OUTPUT);
+
+  delay(20);
+  myDFPlayer.volume(20);  //Set volume value. From 0 to 30
+  delay(20);
 }
 
-void loop() 
+void loop()
 {
-    // Your loop code here
+   int state = digitalRead(button); //btn being read on pin A0
+  if (state == HIGH) { // has pullup so LOW read is pushed
+    delay(20);
+    digitalWrite(led, HIGH);
+    myDFPlayer.play(1); // play track one on dfplayer
+  }
 }
