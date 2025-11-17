@@ -1,12 +1,12 @@
 #include "Arduino.h"
-#include "SoftwareSerial.h"
-#include "NeoSWSerial.h"
+#include <NeoSWSerial.h>
 #include "DFRobotDFPlayerMini.h"
 
 // Use pins 2 and 3 to communicate with DFPlayer Mini
 static const uint8_t PIN_MP3_TX = 7; // Connects to module's RX
 static const uint8_t PIN_MP3_RX = 6; // Connects to module's TX
 NeoSWSerial neoSerial(PIN_MP3_RX, PIN_MP3_TX);
+
 int button = 9;
 int led = 8;
 
@@ -14,25 +14,34 @@ int led = 8;
 DFRobotDFPlayerMini myDFPlayer;
 
 void setup() {
-  Serial.begin(9600);
-  neoSerial.begin(9600);
-  myDFPlayer.begin(neoSerial);
-  myDFPlayer.setTimeOut(5000);
-
   pinMode(button, INPUT);
   pinMode(led, OUTPUT);
-
-  delay(20);
-  myDFPlayer.volume(20);  //Set volume value. From 0 to 30
-  delay(20);
+  
+  Serial.begin(9600);
+  neoSerial.begin(9600);
+  
+  delay(1000); // Give DFPlayer time to initialize
+  
+  if (myDFPlayer.begin(neoSerial)) {
+    Serial.println("DFPlayer Mini online.");
+    myDFPlayer.setTimeOut(500);
+    myDFPlayer.volume(20);  // Set volume value. From 0 to 30
+    myDFPlayer.EQ(DFPLAYER_EQ_NORMAL);
+  } else {
+    Serial.println("Unable to begin DFPlayer");
+  }
 }
 
 void loop()
 {
-   int state = digitalRead(button); //btn being read on pin A0
-  if (state == HIGH) { // has pullup so LOW read is pushed
-    delay(20);
+  int state = digitalRead(button);
+  
+  if (state == HIGH) {
+    delay(50); // Debounce delay
     digitalWrite(led, HIGH);
-    myDFPlayer.play(1); // play track one on dfplayer
+    myDFPlayer.play(1); // Play track one on dfplayer
+    delay(200); // Prevent multiple triggers
+  } else {
+    digitalWrite(led, LOW);
   }
 }
