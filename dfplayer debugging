@@ -1,3 +1,8 @@
+/***************************************************
+DFPlayer - A Mini MP3 Player For Arduino
+ Modified for debugging without Serial Monitor
+ ****************************************************/
+
 #include "Arduino.h"
 #include "DFRobotDFPlayerMini.h"
 #include <SoftwareSerial.h>
@@ -5,33 +10,61 @@
 SoftwareSerial softSerial(/*rx =*/9, /*tx =*/10);
 DFRobotDFPlayerMini myDFPlayer;
 
+const int ERROR_LED = 8;      // LED to show errors
+const int SUCCESS_LED = 7;    // LED to show success (optional, use if you have a spare)
+
 void setup()
 {
-  softSerial.begin(9600);
-  // Remove all Serial.begin() and Serial.println() 
+  pinMode(ERROR_LED, OUTPUT);
+  pinMode(SUCCESS_LED, OUTPUT);
   
+  // Initial flash to show power is on
+  digitalWrite(SUCCESS_LED, HIGH);
+  delay(500);
+  digitalWrite(SUCCESS_LED, LOW);
+  delay(500);
+  
+  softSerial.begin(9600);
+  
+  // Try to initialize DFPlayer
   if (!myDFPlayer.begin(softSerial, /*isACK = */true, /*doReset = */true)) {
-    // Can't debug, but add a visual indicator
-    pinMode(LED_BUILTIN, OUTPUT);
+    // FAILED - Flash ERROR_LED rapidly forever
     while(true){
-      digitalWrite(LED_BUILTIN, HIGH);
-      delay(100);
-      digitalWrite(LED_BUILTIN, LOW);
-      delay(100);
-      // Rapid blinking = DFPlayer init failed
+      digitalWrite(ERROR_LED, HIGH);
+      delay(200);
+      digitalWrite(ERROR_LED, LOW);
+      delay(200);
     }
   }
   
-  myDFPlayer.volume(30);
-  myDFPlayer.play(1);
+  // SUCCESS - Solid SUCCESS_LED for 2 seconds
+  digitalWrite(SUCCESS_LED, HIGH);
+  delay(2000);
+  digitalWrite(SUCCESS_LED, LOW);
+  
+  // Set volume and play
+  myDFPlayer.volume(30);  // Volume 0-30
+  delay(100);
+  myDFPlayer.play(1);     // Play first mp3
+  
+  // Flash SUCCESS_LED once to indicate play command sent
+  digitalWrite(SUCCESS_LED, HIGH);
+  delay(500);
+  digitalWrite(SUCCESS_LED, LOW);
 }
 
 void loop()
 {
   static unsigned long timer = millis();
   
+  // Play next track every 12 seconds
   if (millis() - timer > 12000) {
     timer = millis();
     myDFPlayer.next();
+    
+    // Quick flash to show next() was called
+    digitalWrite(SUCCESS_LED, HIGH);
+    delay(100);
+    digitalWrite(SUCCESS_LED, LOW);
   }
 }
