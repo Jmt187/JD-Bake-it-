@@ -1,0 +1,37 @@
+#include "Arduino.h"
+#include "DFRobotDFPlayerMini.h"
+#include <SoftwareSerial.h>
+
+SoftwareSerial softSerial(/*rx =*/9, /*tx =*/10);
+DFRobotDFPlayerMini myDFPlayer;
+
+void setup()
+{
+  softSerial.begin(9600);
+  // Remove all Serial.begin() and Serial.println() 
+  
+  if (!myDFPlayer.begin(softSerial, /*isACK = */true, /*doReset = */true)) {
+    // Can't debug, but add a visual indicator
+    pinMode(LED_BUILTIN, OUTPUT);
+    while(true){
+      digitalWrite(LED_BUILTIN, HIGH);
+      delay(100);
+      digitalWrite(LED_BUILTIN, LOW);
+      delay(100);
+      // Rapid blinking = DFPlayer init failed
+    }
+  }
+  
+  myDFPlayer.volume(30);
+  myDFPlayer.play(1);
+}
+
+void loop()
+{
+  static unsigned long timer = millis();
+  
+  if (millis() - timer > 12000) {
+    timer = millis();
+    myDFPlayer.next();
+  }
+}
