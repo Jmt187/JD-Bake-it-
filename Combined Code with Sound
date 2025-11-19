@@ -96,31 +96,20 @@ void setup() {
   pinMode(POT_PIN, INPUT);
   pinMode(SLIDE_PIN, INPUT);
   
-  // Initialize DFPlayer Mini
+  // Initialize DFPlayer Mini (optional - won't block if not connected)
   dfPlayerSerial.begin(9600);
   Serial.println(F("Initializing DFPlayer..."));
   
-  delay(1000); // Give DFPlayer time to initialize
+  delay(500); // Brief delay for DFPlayer to initialize
   
-  if (!dfPlayer.begin(dfPlayerSerial, false, true)) { // Use ACK mode = false for more reliable init
-    Serial.println(F("Unable to begin DFPlayer:"));
-    Serial.println(F("1. Please recheck the connection!"));
-    Serial.println(F("2. Please insert the SD card!"));
-    Serial.println(F("Continuing without audio..."));
-    // Continue anyway, don't halt
+  if (!dfPlayer.begin(dfPlayerSerial, false, false)) { // Non-blocking mode
+    Serial.println(F("DFPlayer not detected - continuing without audio"));
   } else {
     Serial.println(F("DFPlayer Mini online."));
-    
-    delay(200); // Wait for DFPlayer to stabilize
-    
-    // Configure DFPlayer settings
     dfPlayer.volume(20);  // Set volume (0-30)
-    delay(200);
-    
-    // Play the first track on SD card to signal game start
+    delay(50);
     dfPlayer.play(1);  // Play first file (0001.mp3 or 001.mp3)
-    Serial.println(F("Playing startup sound (Track 1)"));
-    delay(100);
+    Serial.println(F("Playing startup sound"));
   }
   
   // Initialize I2C communication
@@ -199,7 +188,7 @@ void handlePotentiometer() {
     
     // Blink LED1
     digitalWrite(LED1, HIGH);
-    delay(100);
+    delay(50);  // Reduced delay for faster response
     digitalWrite(LED1, LOW);
     
     // Update display
@@ -229,7 +218,7 @@ void handleSlideSwitch() {
     
     // Blink LED2
     digitalWrite(LED2, HIGH);
-    delay(100);
+    delay(50);  // Reduced delay for faster response
     digitalWrite(LED2, LOW);
     
     // Update display
