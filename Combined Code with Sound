@@ -1,0 +1,264 @@
+/**************************************************************************
+ Combined Score Counter with Potentiometer, Slide Switch, Button, and OLED Display
+ For ATMega328P Microcontroller
+ 
+ This sketch combines three functionalities:
+ 1. Potentiometer input that adds to score and blinks LED1
+ 2. Slide switch input that adds to score and blinks LED2
+ 3. Button input that increments score
+ 4. OLED display showing the current score
+ 
+ Hardware connections for ATMega328P (standalone chip):
+ - OLED Display (I2C): SDA to Pin 27 (PC4/A4), SCL to Pin 28 (PC5/A5)
+ - Button: One side to Pin 4 (PD2/Digital 2), other side to GND
+ - Potentiometer: Output to Pin 26 (PC3/A3)
+ - Slide Switch: Output to Pin 25 (PC2/A4)
+ - LED1: Pin 14 (PB0/Digital 8) with current-limiting resistor to GND
+ - LED2: Pin 13 (PD7/Digital 7) with current-limiting resistor to GND
+ - DFPlayer Mini: RX to Pin 15 (PB1/Digital 9), TX to Pin 16 (PB2/Digital 10)
+ - DFPlayer Mini: VCC to +5V, GND to Ground, SPK_1 and SPK_2 to speaker
+ - Pull-up resistor: 10kΩ between button pin and VCC (or use internal pull-up)
+ 
+ ATMega328P Pin Mapping:
+ - Physical Pin 27 = PC4 = Arduino A4 = SDA
+ - Physical Pin 28 = PC5 = Arduino A5 = SCL
+ - Physical Pin 4  = PD2 = Arduino Digital Pin 2 = Button
+ - Physical Pin 26 = PC3 = Arduino A3 = Potentiometer
+ - Physical Pin 25 = PC2 = Arduino A2 = Slide Switch
+ - Physical Pin 14 = PB0 = Arduino Digital Pin 8 = LED1
+ - Physical Pin 13 = PD7 = Arduino Digital Pin 7 = LED2
+ - Physical Pin 15 = PB1 = Arduino Digital Pin 9 = DFPlayer TX
+ - Physical Pin 16 = PB2 = Arduino Digital Pin 10 = DFPlayer RX
+ - Physical Pin 7  = VCC = +5V
+ - Physical Pin 8  = GND = Ground
+ - Physical Pin 20 = AVCC = +5V
+ - Physical Pin 22 = GND = Ground
+ 
+ **************************************************************************/
+
+#include <SPI.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <SoftwareSerial.h>
+#include <DFRobotDFPlayerMini.h>
+
+// DFPlayer Mini Configuration
+#define DFPLAYER_RX 10         // Connect to DFPlayer TX
+#define DFPLAYER_TX 9          // Connect to DFPlayer RX
+
+SoftwareSerial dfPlayerSerial(DFPLAYER_RX, DFPLAYER_TX); // RX, TX
+DFRobotDFPlayerMini dfPlayer;
+
+// OLED Display Configuration
+#define SCREEN_WIDTH 128       // OLED display width, in pixels
+#define SCREEN_HEIGHT 32       // OLED display height, in pixels
+#define OLED_RESET     -1      // Reset pin # (or -1 if sharing Arduino reset pin)
+#define SCREEN_ADDRESS 0x3C    // 0x3C for 128x32
+
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+// Pin Definitions
+#define POT_PIN 3              // Potentiometer analog input (A3)
+#define SLIDE_PIN 2            // Slide switch analog input (A2)
+#define LED1 8                 // LED 1 output
+#define LED2 7                 // LED 2 output
+#define BUTTON_PIN 2           // Button digital input (with pull-up)
+
+// Threshold values for analog inputs
+#define POT_THRESHOLD 300      // Potentiometer threshold
+#define SLIDE_THRESHOLD 200    // Slide switch threshold
+
+// Debouncing
+#define DEBOUNCE_DELAY 20      // Debounce time in milliseconds
+
+// Button state variables
+int buttonState;               // Current reading from the button
+int lastButtonState = HIGH;    // Previous reading from the button
+unsigned long lastDebounceTime = 0;  // Last time the button state changed
+
+// Analog input state tracking
+bool potTriggered = false;     // Track if pot already triggered
+bool slideTriggered = false;   // Track if slide already triggered
+
+// Score variable
+int score = 0;                 // Total score counter
+
+void setup() {
+  Serial.begin(9600);
+  
+  // Configure digital pins
+  pinMode(LED1, OUTPUT);
+  pinMode(LED2, OUTPUT);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  
+  // Configure analog pins (INPUT is default, but explicit is clearer)
+  pinMode(POT_PIN, INPUT);
+  pinMode(SLIDE_PIN, INPUT);
+  
+  // Initialize DFPlayer Mini
+  dfPlayerSerial.begin(9600);
+  Serial.println(F("Initializing DFPlayer..."));
+  
+  if (!dfPlayer.begin(dfPlayerSerial)) {
+    Serial.println(F("Unable to begin DFPlayer:"));
+    Serial.println(F("1. Please recheck the connection!"));
+    Serial.println(F("2. Please insert the SD card!"));
+    // Continue anyway, don't halt
+  } else {
+    Serial.println(F("DFPlayer Mini online."));
+    
+    // Configure DFPlayer settings
+    dfPlayer.volume(20);  // Set volume (0-30)
+    delay(100);
+    
+    // Play the first track on SD card to signal game start
+    dfPlayer.play(1);  // Play first file (001.mp3)
+    Serial.println(F("Playing startup sound (Track 1)"));
+  }
+  
+  // Initialize I2C communication
+  Wire.begin();
+  
+  // Initialize OLED display
+  if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
+    Serial.println(F("SSD1306 allocation failed"));
+    for(;;); // Don't proceed, loop forever
+  }
+  
+  // Clear the display
+  display.clearDisplay();
+  
+  // Display initial score
+  displayScore();
+  
+  Serial.println(F("Combined Score Counter Initialized"));
+  Serial.println(F("Score: 0"));
+  Serial.println(F("Game Started!"));
+}
+
+void loop() {
+  // ===== Handle Button Input =====
+  handleButton();
+  
+  // ===== Handle Potentiometer Input =====
+  handlePotentiometer();
+  
+  // ===== Handle Slide Switch Input =====
+  handleSlideSwitch();
+}
+
+/**
+ * Handle button press with debouncing
+ */
+void handleButton() {
+  // Read the button state
+  int reading = digitalRead(BUTTON_PIN);
+  
+  // Check if button state changed (for debouncing)
+  if (reading != lastButtonState) {
+    lastDebounceTime = millis();
+  }
+  
+  // Only register button press after debounce delay
+  if ((millis() - lastDebounceTime) > DEBOUNCE_DELAY) {
+    // If the button state has changed
+    if (reading != buttonState) {
+      buttonState = reading;
+      
+      // Button pressed (LOW because of pull-up resistor)
+      if (buttonState == LOW) {
+        score++;  // Increment score
+        displayScore();  // Update display
+        
+        Serial.print(F("Button pressed! Score: "));
+        Serial.println(score);
+      }
+    }
+  }
+  
+  lastButtonState = reading;
+}
+
+/**
+ * Handle potentiometer input
+ */
+void handlePotentiometer() {
+  int potValue = analogRead(POT_PIN);
+  
+  if (potValue > POT_THRESHOLD && !potTriggered) {
+    // Potentiometer exceeded threshold
+    score++;
+    potTriggered = true;  // Set flag to prevent multiple counts
+    
+    // Blink LED1
+    digitalWrite(LED1, HIGH);
+    delay(100);
+    digitalWrite(LED1, LOW);
+    
+    // Update display
+    displayScore();
+    
+    Serial.print(F("Potentiometer triggered! Value: "));
+    Serial.print(potValue);
+    Serial.print(F(", Score: "));
+    Serial.println(score);
+  } 
+  else if (potValue <= POT_THRESHOLD) {
+    // Reset trigger flag when potentiometer goes below threshold
+    potTriggered = false;
+  }
+}
+
+/**
+ * Handle slide switch input
+ */
+void handleSlideSwitch() {
+  int slideValue = analogRead(SLIDE_PIN);
+  
+  if (slideValue > SLIDE_THRESHOLD && !slideTriggered) {
+    // Slide switch exceeded threshold
+    score++;
+    slideTriggered = true;  // Set flag to prevent multiple counts
+    
+    // Blink LED2
+    digitalWrite(LED2, HIGH);
+    delay(100);
+    digitalWrite(LED2, LOW);
+    
+    // Update display
+    displayScore();
+    
+    Serial.print(F("Slide switch triggered! Value: "));
+    Serial.print(slideValue);
+    Serial.print(F(", Score: "));
+    Serial.println(score);
+  } 
+  else if (slideValue <= SLIDE_THRESHOLD) {
+    // Reset trigger flag when slide switch goes below threshold
+    slideTriggered = false;
+  }
+}
+
+/**
+ * Display the current score on the OLED
+ */
+void displayScore() {
+  display.clearDisplay();
+  
+  // Set text properties
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  
+  // Display "Score:" label
+  display.println(F("Score:"));
+  
+  // Display the actual score in larger text
+  display.setTextSize(2);
+  display.setCursor(0, 12);
+  display.print(score);
+  
+  // Update the display
+  display.display();
+}
