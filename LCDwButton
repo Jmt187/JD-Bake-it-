@@ -38,7 +38,7 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 // Button configuration
 // ATMega328P Physical Pin 4 = PD2 = Arduino Digital Pin 2
 #define BUTTON_PIN 2        // Pin connected to button
-#define DEBOUNCE_DELAY 50   // Debounce time in milliseconds
+#define DEBOUNCE_DELAY 20   // Debounce time in milliseconds
 
 // Variables for button state and debouncing
 int buttonState;            // Current reading from the button
