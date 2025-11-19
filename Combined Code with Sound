@@ -100,21 +100,27 @@ void setup() {
   dfPlayerSerial.begin(9600);
   Serial.println(F("Initializing DFPlayer..."));
   
-  if (!dfPlayer.begin(dfPlayerSerial)) {
+  delay(1000); // Give DFPlayer time to initialize
+  
+  if (!dfPlayer.begin(dfPlayerSerial, false, true)) { // Use ACK mode = false for more reliable init
     Serial.println(F("Unable to begin DFPlayer:"));
     Serial.println(F("1. Please recheck the connection!"));
     Serial.println(F("2. Please insert the SD card!"));
+    Serial.println(F("Continuing without audio..."));
     // Continue anyway, don't halt
   } else {
     Serial.println(F("DFPlayer Mini online."));
     
+    delay(200); // Wait for DFPlayer to stabilize
+    
     // Configure DFPlayer settings
     dfPlayer.volume(20);  // Set volume (0-30)
-    delay(100);
+    delay(200);
     
     // Play the first track on SD card to signal game start
-    dfPlayer.play(1);  // Play first file (001.mp3)
+    dfPlayer.play(1);  // Play first file (0001.mp3 or 001.mp3)
     Serial.println(F("Playing startup sound (Track 1)"));
+    delay(100);
   }
   
   // Initialize I2C communication
