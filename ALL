@@ -1,0 +1,270 @@
+/***************************************************
+  Combined Score Counter + OLED + DFPlayer Mini Audio
+  Target: ATmega328P w/ external crystal (bootloader burned)
+
+  Inputs/Outputs:
+  - Potentiometer on A3: increments score once when above threshold, blinks LED1
+  - Slide switch on A2: increments score once when above threshold, blinks LED2
+  - Button on D2 (pullup): increments score on press
+  - OLED I2C on A4/A5: shows score
+  - DFPlayer Mini on D9/D10 (SoftwareSerial): plays sound on score increment
+
+ ****************************************************/
+
+#include <Arduino.h>
+#include "DFRobotDFPlayerMini.h"
+#include <SoftwareSerial.h>
+
+#include <SPI.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+// ================= OLED CONFIG =================
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 32
+#define OLED_RESET     -1
+#define SCREEN_ADDRESS 0x3C
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+// ================= PIN DEFINITIONS =================
+// Analog
+#define POT_PIN   A3
+#define SLIDE_PIN A2
+
+// Digital
+#define BUTTON_PIN 2
+#define LED1       8
+#define LED2       7
+
+// DFPlayer SoftwareSerial pins
+#define DFPLAYER_RX 9   // Arduino receives on D9  (connect to DFPlayer TX)
+#define DFPLAYER_TX 10  // Arduino transmits on D10 (connect to DFPlayer RX)
+
+// ================= THRESHOLDS / TIMING =================
+#define POT_THRESHOLD   300
+#define SLIDE_THRESHOLD 200
+#define DEBOUNCE_DELAY  20
+
+// Which track to play when score changes (SD card track number)
+// Put files as 0001.mp3, 0002.mp3, etc.
+#define SCORE_SOUND_TRACK 1
+#define DFPLAYER_VOLUME   30  // 0–30
+
+// ================= DFPLAYER =================
+SoftwareSerial FPSerial(DFPLAYER_RX, DFPLAYER_TX);
+DFRobotDFPlayerMini myDFPlayer;
+
+void printDetail(uint8_t type, int value);
+
+// ================= STATE =================
+int score = 0;
+
+// Button debounce
+int buttonState = HIGH;
+int lastButtonState = HIGH;
+unsigned long lastDebounceTime = 0;
+
+// Analog one-shot triggers
+bool potTriggered = false;
+bool slideTriggered = false;
+
+// ================= HELPERS =================
+void displayScore();
+void onScoreIncrement();
+void handleButton();
+void handlePotentiometer();
+void handleSlideSwitch();
+
+void setup() {
+  // Debug serial
+  Serial.begin(115200);
+  Serial.println();
+  Serial.println(F("Initializing Combined System..."));
+
+  // Digital IO
+  pinMode(LED1, OUTPUT);
+  pinMode(LED2, OUTPUT);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+
+  // Analog pins are inputs by default, but explicit is fine
+  pinMode(POT_PIN, INPUT);
+  pinMode(SLIDE_PIN, INPUT);
+
+  // I2C + OLED init
+  Wire.begin();
+  if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
+    Serial.println(F("SSD1306 allocation failed"));
+    for(;;);
+  }
+  display.clearDisplay();
+  displayScore();
+
+  // DFPlayer init
+  FPSerial.begin(9600);
+  Serial.println(F("Initializing DFPlayer ... (May take 3~5 seconds)"));
+
+  if (!myDFPlayer.begin(FPSerial, /*isACK=*/true, /*doReset=*/true)) {
+    Serial.println(F("Unable to begin DFPlayer:"));
+    Serial.println(F("1) Recheck wiring"));
+    Serial.println(F("2) Insert SD card"));
+    while(true) { delay(0); }
+  }
+
+  Serial.println(F("DFPlayer Mini online."));
+  myDFPlayer.volume(DFPLAYER_VOLUME);
+
+  Serial.println(F("Combined Score Counter Ready. Score = 0"));
+}
+
+void loop() {
+  handleButton();
+  handlePotentiometer();
+  handleSlideSwitch();
+
+  // Optional: print DFPlayer status/errors if any
+  if (myDFPlayer.available()) {
+    printDetail(myDFPlayer.readType(), myDFPlayer.read());
+  }
+}
+
+// ================= EVENT: SCORE INCREMENT =================
+void onScoreIncrement() {
+  score++;
+  displayScore();
+
+  Serial.print(F("Score: "));
+  Serial.println(score);
+
+  // Play a sound each time score changes
+  myDFPlayer.play(SCORE_SOUND_TRACK);
+}
+
+// ================= BUTTON =================
+void handleButton() {
+  int reading = digitalRead(BUTTON_PIN);
+
+  if (reading != lastButtonState) {
+    lastDebounceTime = millis();
+  }
+
+  if ((millis() - lastDebounceTime) > DEBOUNCE_DELAY) {
+    if (reading != buttonState) {
+      buttonState = reading;
+
+      if (buttonState == LOW) {
+        Serial.println(F("Button pressed!"));
+        onScoreIncrement();
+      }
+    }
+  }
+
+  lastButtonState = reading;
+}
+
+// ================= POTENTIOMETER =================
+void handlePotentiometer() {
+  int potValue = analogRead(POT_PIN);
+
+  if (potValue > POT_THRESHOLD && !potTriggered) {
+    potTriggered = true;
+
+    Serial.print(F("Pot triggered! Value: "));
+    Serial.println(potValue);
+
+    // Blink LED1
+    digitalWrite(LED1, HIGH);
+    delay(100);
+    digitalWrite(LED1, LOW);
+
+    onScoreIncrement();
+  }
+  else if (potValue <= POT_THRESHOLD) {
+    potTriggered = false;
+  }
+}
+
+// ================= SLIDE SWITCH =================
+void handleSlideSwitch() {
+  int slideValue = analogRead(SLIDE_PIN);
+
+  if (slideValue > SLIDE_THRESHOLD && !slideTriggered) {
+    slideTriggered = true;
+
+    Serial.print(F("Slide triggered! Value: "));
+    Serial.println(slideValue);
+
+    // Blink LED2
+    digitalWrite(LED2, HIGH);
+    delay(100);
+    digitalWrite(LED2, LOW);
+
+    onScoreIncrement();
+  }
+  else if (slideValue <= SLIDE_THRESHOLD) {
+    slideTriggered = false;
+  }
+}
+
+// ================= OLED DISPLAY =================
+void displayScore() {
+  display.clearDisplay();
+
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.println(F("Score:"));
+
+  display.setTextSize(2);
+  display.setCursor(0, 12);
+  display.print(score);
+
+  display.display();
+}
+
+// ================= DFPLAYER DEBUG =================
+void printDetail(uint8_t type, int value) {
+  switch (type) {
+    case TimeOut:
+      Serial.println(F("DFPlayer: Time Out!"));
+      break;
+    case WrongStack:
+      Serial.println(F("DFPlayer: Stack Wrong!"));
+      break;
+    case DFPlayerCardInserted:
+      Serial.println(F("DFPlayer: Card Inserted!"));
+      break;
+    case DFPlayerCardRemoved:
+      Serial.println(F("DFPlayer: Card Removed!"));
+      break;
+    case DFPlayerCardOnline:
+      Serial.println(F("DFPlayer: Card Online!"));
+      break;
+    case DFPlayerUSBInserted:
+      Serial.println(F("DFPlayer: USB Inserted!"));
+      break;
+    case DFPlayerUSBRemoved:
+      Serial.println(F("DFPlayer: USB Removed!"));
+      break;
+    case DFPlayerPlayFinished:
+      Serial.print(F("DFPlayer: Track "));
+      Serial.print(value);
+      Serial.println(F(" finished."));
+      break;
+    case DFPlayerError:
+      Serial.print(F("DFPlayerError: "));
+      switch (value) {
+        case Busy:            Serial.println(F("Card not found")); break;
+        case Sleeping:        Serial.println(F("Sleeping")); break;
+        case SerialWrongStack:Serial.println(F("Wrong Stack")); break;
+        case CheckSumNotMatch:Serial.println(F("Checksum mismatch")); break;
+        case FileIndexOut:    Serial.println(F("File index out of bounds")); break;
+        case FileMismatch:    Serial.println(F("Cannot find file")); break;
+        case Advertise:       Serial.println(F("In advertise")); break;
+        default:              Serial.println(F("Unknown")); break;
+      }
+      break;
+    default:
+      break;
+  }
+}
