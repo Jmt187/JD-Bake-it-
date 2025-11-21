@@ -1,13 +1,25 @@
+#include <Wire.h>
+
 void setup() {
-  pinMode(8, OUTPUT);  // LED1
-  pinMode(7, OUTPUT);  // LED2
+  Wire.begin();
+  Serial.begin(115200);
+  pinMode(8, OUTPUT);
+  digitalWrite(8, HIGH); // Turn on LED to show it's running
 }
 
 void loop() {
-  digitalWrite(8, HIGH);
-  digitalWrite(7, HIGH);
-  delay(500);
-  digitalWrite(8, LOW);
-  digitalWrite(7, LOW);
-  delay(500);
+  byte error, address;
+  
+  for(address = 1; address < 127; address++) {
+    Wire.beginTransmission(address);
+    error = Wire.endTransmission();
+    
+    if (error == 0) {
+      digitalWrite(8, LOW);
+      delay(100);
+      digitalWrite(8, HIGH); // Blink when device found
+      delay(100);
+    }
+  }
+  delay(2000);
 }
