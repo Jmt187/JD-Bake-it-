@@ -1,0 +1,124 @@
+#include "Arduino.h"
+#include "DFRobotDFPlayerMini.h"
+
+#if (defined(ARDUINO_AVR_UNO) || defined(ESP8266))   // Using a soft serial port
+  #include <SoftwareSerial.h>
+  SoftwareSerial softSerial(/*rx =*/9, /*tx =*/10);
+  #define FPSerial softSerial
+#else
+  #define FPSerial Serial1
+#endif
+
+#include <SPI.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+// ================= OLED CONFIG =================
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 32
+
+#define OLED_RESET     -1
+#define SCREEN_ADDRESS 0x3C   // 0x3C for 128x32
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+// ================= BUTTON CONFIG =================
+#define BUTTON_PIN 2
+#define DEBOUNCE_DELAY 20
+
+int buttonState = HIGH;
+int lastButtonState = HIGH;
+unsigned long lastDebounceTime = 0;
+int score = 0;
+
+// ================= DFPLAYER =================
+DFRobotDFPlayerMini myDFPlayer;
+
+// DFPlayer timer
+unsigned long musicTimer = 0;
+const unsigned long MUSIC_INTERVAL = 20000; // 20 seconds
+
+// ================= OLED FUNCTION =================
+void displayScore() {
+  display.clearDisplay();
+
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.println(F("Score:"));
+
+  display.setTextSize(2);
+  display.setCursor(0, 12);
+  display.print(score);
+
+  display.display();
+}
+
+void setup() {
+  // Debug serial (pick one rate; 115200 is nice for fast logs)
+  Serial.begin(115200);
+  Serial.println();
+  Serial.println(F("Booting combined DFPlayer + OLED score counter..."));
+
+  // Button input with pullup
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+
+  // I2C + OLED init
+  Wire.begin();
+  if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
+    Serial.println(F("SSD1306 allocation failed"));
+    for(;;);
+  }
+  display.clearDisplay();
+  displayScore();
+
+  // DFPlayer serial + init
+#if (defined ESP32)
+  FPSerial.begin(9600, SERIAL_8N1, /*rx=*/D3, /*tx=*/D2);
+#else
+  FPSerial.begin(9600);
+#endif
+
+  Serial.println(F("Initializing DFPlayer..."));
+  if (!myDFPlayer.begin(FPSerial, /*isACK=*/true, /*doReset=*/true)) {
+    Serial.println(F("DFPlayer init failed. Check wiring + SD card."));
+    for(;;) { delay(0); }
+  }
+
+  myDFPlayer.volume(20);  // 0–30
+  myDFPlayer.play(1);     // start with first mp3
+
+  musicTimer = millis();
+  Serial.println(F("Setup complete."));
+}
+
+void loop() {
+  // ========== BUTTON / SCORE ==========
+  int reading = digitalRead(BUTTON_PIN);
+
+  if (reading != lastButtonState) {
+    lastDebounceTime = millis();
+  }
+
+  if ((millis() - lastDebounceTime) > DEBOUNCE_DELAY) {
+    if (reading != buttonState) {
+      buttonState = reading;
+
+      if (buttonState == LOW) {
+        score++;
+        displayScore();
+
+        Serial.print(F("Button pressed! Score: "));
+        Serial.println(score);
+      }
+    }
+  }
+  lastButtonState = reading;
+
+  // ========== DFPLAYER TIMER ==========
+  if (millis() - musicTimer > MUSIC_INTERVAL) {
+    musicTimer = millis();
+    myDFPlayer.next();  // next mp3 every 20 seconds
+    Serial.println(F("DFPlayer: next track"));
+  }
+}
