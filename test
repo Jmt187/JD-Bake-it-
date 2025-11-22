@@ -11,32 +11,38 @@
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
-// Potentiometer Pin Definitions
+// Potentiometer Pins (explicit analog pins)
 #define ROTARY_POT_PIN  A3   // rotary potentiometer on A3
 #define LINEAR_POT_PIN  A2   // linear potentiometer on A2
 
-// Threshold values for analog inputs
+// LED Pins
+#define LED1 8               // LED for rotary pot trigger
+#define LED2 7               // LED for linear pot trigger
+
+// Threshold values
 #define ROTARY_THRESHOLD 300
 #define LINEAR_THRESHOLD 200
 
-// Analog input edge-trigger tracking
+// Trigger flags (edge-detect so it only counts once per crossing)
 bool rotaryTriggered = false;
 bool linearTriggered = false;
 
-// Score variable
+// Score
 int score = 0;
 
 void setup() {
   Serial.begin(9600);
 
-  // Analog pins are inputs by default, but explicit is fine
+  // LEDs
+  pinMode(LED1, OUTPUT);
+  pinMode(LED2, OUTPUT);
+
+  // Pots
   pinMode(ROTARY_POT_PIN, INPUT);
   pinMode(LINEAR_POT_PIN, INPUT);
 
-  // Initialize I2C communication
+  // I2C + OLED init
   Wire.begin();
-
-  // Initialize OLED display
   if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
     Serial.println(F("SSD1306 allocation failed"));
     for(;;);
@@ -56,7 +62,6 @@ void loop() {
 
 /**
  * Handle rotary potentiometer input
- * Increments score once per threshold crossing.
  */
 void handleRotaryPot() {
   int rotaryValue = analogRead(ROTARY_POT_PIN);
@@ -64,6 +69,11 @@ void handleRotaryPot() {
   if (rotaryValue > ROTARY_THRESHOLD && !rotaryTriggered) {
     score++;
     rotaryTriggered = true;
+
+    // Blink LED1
+    digitalWrite(LED1, HIGH);
+    delay(100);
+    digitalWrite(LED1, LOW);
 
     displayScore();
 
@@ -73,13 +83,12 @@ void handleRotaryPot() {
     Serial.println(score);
   }
   else if (rotaryValue <= ROTARY_THRESHOLD) {
-    rotaryTriggered = false; // reset when back below threshold
+    rotaryTriggered = false;
   }
 }
 
 /**
  * Handle linear potentiometer input
- * Increments score once per threshold crossing.
  */
 void handleLinearPot() {
   int linearValue = analogRead(LINEAR_POT_PIN);
@@ -87,6 +96,11 @@ void handleLinearPot() {
   if (linearValue > LINEAR_THRESHOLD && !linearTriggered) {
     score++;
     linearTriggered = true;
+
+    // Blink LED2
+    digitalWrite(LED2, HIGH);
+    delay(100);
+    digitalWrite(LED2, LOW);
 
     displayScore();
 
@@ -96,12 +110,12 @@ void handleLinearPot() {
     Serial.println(score);
   }
   else if (linearValue <= LINEAR_THRESHOLD) {
-    linearTriggered = false; // reset when back below threshold
+    linearTriggered = false;
   }
 }
 
 /**
- * Display the current score on the OLED
+ * Display score on OLED
  */
 void displayScore() {
   display.clearDisplay();
