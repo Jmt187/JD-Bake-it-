@@ -1,0 +1,97 @@
+#include <SPI.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+#define SCREEN_WIDTH 128 // OLED display width, in pixels
+#define SCREEN_HEIGHT 32 // OLED display height, in pixels
+
+// Declaration for an SSD1306 display connected to I2C (SDA, SCL pins)
+// ATMega328P: Pin 27 (PC4/A4) = SDA, Pin 28 (PC5/A5) = SCL
+#define OLED_RESET     -1 // Reset pin # (or -1 if sharing Arduino reset pin)
+#define SCREEN_ADDRESS 0x3C // 0x3C for 128x32
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+// Button configuration
+// ATMega328P Physical Pin 4 = PD2 = Arduino Digital Pin 2
+#define BUTTON_PIN 2        // Pin connected to button
+#define DEBOUNCE_DELAY 20   // Debounce time in milliseconds
+
+// Variables for button state and debouncing
+int buttonState;            // Current reading from the button
+int lastButtonState = HIGH; // Previous reading from the button
+unsigned long lastDebounceTime = 0;  // Last time the button state changed
+int score = 0;              // Score counter
+
+void setup() {
+  Serial.begin(9600);
+  
+  // Configure button pin with internal pull-up resistor
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+
+  // Initialize I2C communication
+  Wire.begin();
+
+  // Initialize OLED display
+  if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
+    Serial.println(F("SSD1306 allocation failed"));
+    for(;;); // Don't proceed, loop forever
+  }
+
+  // Clear the display
+  display.clearDisplay();
+  
+  // Display initial score
+  displayScore();
+  
+  Serial.println(F("Score counter initialized"));
+}
+
+void loop() {
+  // Read the button state
+  int reading = digitalRead(BUTTON_PIN);
+
+  // Check if button state changed (for debouncing)
+  if (reading != lastButtonState) {
+    lastDebounceTime = millis();
+  }
+
+  // Only register button press after debounce delay
+  if ((millis() - lastDebounceTime) > DEBOUNCE_DELAY) {
+    // If the button state has changed
+    if (reading != buttonState) {
+      buttonState = reading;
+
+      // Button pressed (LOW because of pull-up resistor)
+      if (buttonState == LOW) {
+        score++;  // Increment score
+        displayScore();  // Update display
+        
+        Serial.print(F("Button pressed! Score: "));
+        Serial.println(score);
+      }
+    }
+  }
+
+  lastButtonState = reading;
+}
+
+void displayScore() {
+  display.clearDisplay();
+  
+  // Set text properties
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  
+  // Display "Score:" label
+  display.println(F("Score:"));
+  
+  // Display the actual score in larger text
+  display.setTextSize(2);
+  display.setCursor(0, 12);
+  display.print(score);
+  
+  // Update the display
+  display.display();
+}
