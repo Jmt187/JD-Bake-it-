@@ -1,0 +1,174 @@
+#include "Arduino.h"
+#include "DFRobotDFPlayerMini.h"
+
+#if (defined(ARDUINO_AVR_UNO) || defined(ESP8266))   // Using a soft serial port
+  #include <SoftwareSerial.h>
+  SoftwareSerial softSerial(/*rx =*/9, /*tx =*/10);
+  #define FPSerial softSerial
+#else
+  #define FPSerial Serial1
+#endif
+
+#include <SPI.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+// ================= OLED CONFIG =================
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 32
+#define OLED_RESET     -1
+#define SCREEN_ADDRESS 0x3C
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+// ================= INPUTS / OUTPUTS =================
+// Potentiometers (explicit analog pins)
+#define ROTARY_POT_PIN  A3   // rotary potentiometer on A3
+#define LINEAR_POT_PIN  A2   // linear potentiometer on A2
+
+// LEDs
+#define LED1 8               // LED for rotary pot trigger
+#define LED2 7               // LED for linear pot trigger
+
+// Thresholds
+#define ROTARY_THRESHOLD 300
+#define LINEAR_THRESHOLD 200
+
+// Edge-detect flags
+bool rotaryTriggered = false;
+bool linearTriggered = false;
+
+// Score
+int score = 0;
+
+// ================= DFPLAYER =================
+DFRobotDFPlayerMini myDFPlayer;
+
+// DFPlayer timer
+unsigned long musicTimer = 0;
+const unsigned long MUSIC_INTERVAL = 20000; // 20 seconds
+
+// ================= OLED FUNCTION =================
+void displayScore() {
+  display.clearDisplay();
+
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.println(F("Score:"));
+
+  display.setTextSize(2);
+  display.setCursor(0, 12);
+  display.print(score);
+
+  display.display();
+}
+
+void setup() {
+  Serial.begin(115200);
+  Serial.println();
+  Serial.println(F("Booting Pots + LEDs + OLED + DFPlayer..."));
+
+  // LEDs
+  pinMode(LED1, OUTPUT);
+  pinMode(LED2, OUTPUT);
+
+  // Pots
+  pinMode(ROTARY_POT_PIN, INPUT);
+  pinMode(LINEAR_POT_PIN, INPUT);
+
+  // I2C + OLED init
+  Wire.begin();
+  if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
+    Serial.println(F("SSD1306 allocation failed"));
+    for(;;);
+  }
+  display.clearDisplay();
+  displayScore();
+
+  // DFPlayer serial + init
+#if (defined ESP32)
+  FPSerial.begin(9600, SERIAL_8N1, /*rx=*/D3, /*tx=*/D2);
+#else
+  FPSerial.begin(9600);
+#endif
+
+  Serial.println(F("Initializing DFPlayer..."));
+  if (!myDFPlayer.begin(FPSerial, /*isACK=*/true, /*doReset=*/true)) {
+    Serial.println(F("DFPlayer init failed. Check wiring + SD card."));
+    for(;;) { delay(0); }
+  }
+
+  myDFPlayer.volume(20);  // 0–30
+  myDFPlayer.play(1);     // start with first mp3
+
+  musicTimer = millis();
+
+  Serial.println(F("Setup complete. Score = 0"));
+}
+
+void loop() {
+  handleRotaryPot();
+  handleLinearPot();
+
+  // ========== DFPLAYER AUTO-NEXT ==========
+  if (millis() - musicTimer > MUSIC_INTERVAL) {
+    musicTimer = millis();
+    myDFPlayer.next();  // next mp3 every 20 seconds
+    Serial.println(F("DFPlayer: next track"));
+  }
+}
+
+/**
+ * Handle rotary potentiometer input
+ */
+void handleRotaryPot() {
+  int rotaryValue = analogRead(ROTARY_POT_PIN);
+
+  if (rotaryValue > ROTARY_THRESHOLD && !rotaryTriggered) {
+    score++;
+    rotaryTriggered = true;
+
+    // Blink LED1
+    digitalWrite(LED1, HIGH);
+    delay(100);
+    digitalWrite(LED1, LOW);
+
+    displayScore();
+
+    Serial.print(F("Rotary pot triggered! Value: "));
+    Serial.print(rotaryValue);
+    Serial.print(F(", Score: "));
+    Serial.println(score);
+  }
+  else if (rotaryValue <= ROTARY_THRESHOLD) {
+    rotaryTriggered = false;
+  }
+}
+
+/**
+ * Handle linear potentiometer input
+ */
+void handleLinearPot() {
+  int linearValue = analogRead(LINEAR_POT_PIN);
+
+  if (linearValue > LINEAR_THRESHOLD && !linearTriggered) {
+    score++;
+    linearTriggered = true;
+
+    // Blink LED2
+    digitalWrite(LED2, HIGH);
+    delay(100);
+    digitalWrite(LED2, LOW);
+
+    displayScore();
+
+    Serial.print(F("Linear pot triggered! Value: "));
+    Serial.print(linearValue);
+    Serial.print(F(", Score: "));
+    Serial.println(score);
+  }
+  else if (linearValue <= LINEAR_THRESHOLD) {
+    linearTriggered = false;
+  }
+}
