@@ -1,213 +1,275 @@
-/**************************************************************************
- Combined Score Counter with Audio Feedback
- For ATMega328P Microcontroller
- **************************************************************************/
-
-#include <Wire.h>
-#include <LiquidCrystal_I2C.h>
-#include <SoftwareSerial.h>
+#include "Arduino.h"
 #include "DFRobotDFPlayerMini.h"
 
-// LCD Configuration (adjust address if needed - common addresses are 0x27 or 0x3F)
-#define LCD_ADDRESS 0x27       
-#define LCD_COLUMNS 16         
-#define LCD_ROWS 2             
+#if (defined(ARDUINO_AVR_UNO) || defined(ESP8266))   // Using a soft serial port
+  #include <SoftwareSerial.h>
+  SoftwareSerial softSerial(/*rx =*/9, /*tx =*/10);
+  #define FPSerial softSerial
+#else
+  #define FPSerial Serial1
+#endif
 
-LiquidCrystal_I2C lcd(LCD_ADDRESS, LCD_COLUMNS, LCD_ROWS);
+#include <SPI.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
 
-// DFPlayer Configuration
-#define DFPLAYER_RX 9          
-#define DFPLAYER_TX 10         
-SoftwareSerial dfPlayerSerial(DFPLAYER_RX, DFPLAYER_TX);
+// ================= OLED CONFIG =================
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 32
+#define OLED_RESET     -1
+#define SCREEN_ADDRESS 0x3C
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+// ================= INPUTS / OUTPUTS =================
+// Potentiometers
+#define ROTARY_POT_PIN  A3
+#define LINEAR_POT_PIN  A2
+
+// Score button (increments score)
+#define BUTTON_PIN 2   // D2 / PD2
+
+// START button (must be pressed to begin)
+#define START_BUTTON_PIN 4   // D4 / PD4 / physical pin 6
+
+// LEDs
+#define LED1 8
+#define LED2 7
+
+// Thresholds
+#define ROTARY_THRESHOLD 300
+#define LINEAR_THRESHOLD 200
+
+// Debounce
+#define DEBOUNCE_DELAY 20
+
+// ================= STATE =================
+// Game state
+bool gameStarted = false;
+
+// Edge-detect flags for pots
+bool rotaryTriggered = false;
+bool linearTriggered = false;
+
+// Score button debounce state
+int buttonState = HIGH;
+int lastButtonState = HIGH;
+unsigned long lastDebounceTime = 0;
+
+// START button debounce state
+int startButtonState = HIGH;
+int lastStartButtonState = HIGH;
+unsigned long lastStartDebounceTime = 0;
+
+// Score
+int score = 0;
+
+// ================= DFPLAYER =================
 DFRobotDFPlayerMini myDFPlayer;
 
-// Pin Definitions
-#define ROTARY_POT_PIN A3      
-#define SLIDE_POT_PIN A2       
-#define LED1 8                 
-#define LED2 7                 
-#define BUTTON_PIN 2           
+// DFPlayer timer
+unsigned long musicTimer = 0;
+const unsigned long MUSIC_INTERVAL = 20000; // 20 seconds
 
-// Threshold values for analog inputs
-#define ROTARY_THRESHOLD 300   
-#define SLIDE_THRESHOLD 300    
+// ================= OLED FUNCTIONS =================
+void displayScore() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.println(F("Score:"));
 
-// Debouncing
-#define DEBOUNCE_DELAY 20      
+  display.setTextSize(2);
+  display.setCursor(0, 12);
+  display.print(score);
 
-// Button state variables
-int buttonState;               
-int lastButtonState = HIGH;    
-unsigned long lastDebounceTime = 0;  
+  display.display();
+}
 
-// Analog input state tracking
-bool rotaryTriggered = false;  
-bool slideTriggered = false;   
+void displayPressStart() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.println(F("Press START"));
+  display.println(F("to begin"));
+  display.display();
+}
 
-// Score variable
-int score = 0;                 
+// Centralized score increment
+void incrementScore(const __FlashStringHelper* source) {
+  score++;
+  displayScore();
 
-// Audio playback control
-bool dfPlayerReady = false;    
-unsigned long lastAudioTime = 0;
-#define AUDIO_COOLDOWN 500     
+  Serial.print(source);
+  Serial.print(F(" Score: "));
+  Serial.println(score);
+}
 
 void setup() {
   Serial.begin(115200);
-  Serial.println(F("Score Counter with Audio System"));
-  
-  // Configure pins
+  Serial.println();
+  Serial.println(F("Booting Start+Button+Pots+LEDs+OLED+DFPlayer..."));
+
+  // LEDs
   pinMode(LED1, OUTPUT);
   pinMode(LED2, OUTPUT);
-  pinMode(BUTTON_PIN, INPUT_PULLUP);
+
+  // Pots
   pinMode(ROTARY_POT_PIN, INPUT);
-  pinMode(SLIDE_POT_PIN, INPUT);
-  
-  // Initialize LCD
+  pinMode(LINEAR_POT_PIN, INPUT);
+
+  // Buttons
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(START_BUTTON_PIN, INPUT_PULLUP);
+
+  // I2C + OLED init
   Wire.begin();
-  lcd.init();
-  lcd.backlight();
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Initializing...");
-  
-  // Initialize DFPlayer Mini
-  dfPlayerSerial.begin(9600);
-  delay(1000);
-  
-  if (!myDFPlayer.begin(dfPlayerSerial, true, true)) {
-    Serial.println(F("DFPlayer failed - check SD card"));
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("Audio: ERROR");
-    delay(3000);
-    dfPlayerReady = false;
-  } else {
-    Serial.println(F("DFPlayer Mini online"));
-    myDFPlayer.volume(25);  // Volume 0-30
-    dfPlayerReady = true;
+  if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
+    Serial.println(F("SSD1306 allocation failed"));
+    for(;;);
   }
-  
-  // Display initial score
-  displayScore();
-  Serial.println(F("System Ready!"));
+
+  displayPressStart();
+
+  // DFPlayer serial + init (but don't start playing yet)
+#if (defined ESP32)
+  FPSerial.begin(9600, SERIAL_8N1, /*rx=*/D3, /*tx=*/D2);
+#else
+  FPSerial.begin(9600);
+#endif
+
+  Serial.println(F("Initializing DFPlayer..."));
+  if (!myDFPlayer.begin(FPSerial, /*isACK=*/true, /*doReset=*/true)) {
+    Serial.println(F("DFPlayer init failed. Check wiring + SD card."));
+    for(;;) { delay(0); }
+  }
+
+  myDFPlayer.volume(20);  // 0–30
+
+  Serial.println(F("Waiting for START button..."));
 }
 
 void loop() {
-  handleButton();
+  // Always check START button
+  handleStartButton();
+
+  // If game not started yet, ignore everything else
+  if (!gameStarted) return;
+
+  // Game inputs
+  handleScoreButton();
   handleRotaryPot();
-  handleSlidePot();
-  
-  if (dfPlayerReady && myDFPlayer.available()) {
-    printDFPlayerDetail(myDFPlayer.readType(), myDFPlayer.read());
+  handleLinearPot();
+
+  // DFPlayer auto-next only after game starts
+  if (millis() - musicTimer > MUSIC_INTERVAL) {
+    musicTimer = millis();
+    myDFPlayer.next();
+    Serial.println(F("DFPlayer: next track"));
   }
 }
 
-void handleButton() {
-  int reading = digitalRead(BUTTON_PIN);
-  
-  if (reading != lastButtonState) {
-    lastDebounceTime = millis();
+/**
+ * START button handler (debounced)
+ * Pressing START begins the game.
+ */
+void handleStartButton() {
+  int reading = digitalRead(START_BUTTON_PIN);
+
+  if (reading != lastStartButtonState) {
+    lastStartDebounceTime = millis();
   }
-  
-  if ((millis() - lastDebounceTime) > DEBOUNCE_DELAY) {
-    if (reading != buttonState) {
-      buttonState = reading;
-      
-      if (buttonState == LOW) {
-        score++;
+
+  if ((millis() - lastStartDebounceTime) > DEBOUNCE_DELAY) {
+    if (reading != startButtonState) {
+      startButtonState = reading;
+
+      if (startButtonState == LOW && !gameStarted) {
+        gameStarted = true;
+
+        // Reset game state
+        score = 0;
+        rotaryTriggered = false;
+        linearTriggered = false;
+
         displayScore();
-        playScoreSound();
-        Serial.print(F("Button pressed! Score: "));
-        Serial.println(score);
+
+        // Start music now
+        myDFPlayer.play(1);
+        musicTimer = millis();
+
+        Serial.println(F("START pressed — game begun!"));
       }
     }
   }
-  
+
+  lastStartButtonState = reading;
+}
+
+/**
+ * Score button press with debouncing
+ */
+void handleScoreButton() {
+  int reading = digitalRead(BUTTON_PIN);
+
+  if (reading != lastButtonState) {
+    lastDebounceTime = millis();
+  }
+
+  if ((millis() - lastDebounceTime) > DEBOUNCE_DELAY) {
+    if (reading != buttonState) {
+      buttonState = reading;
+
+      if (buttonState == LOW) {
+        incrementScore(F("Score button pressed!"));
+      }
+    }
+  }
+
   lastButtonState = reading;
 }
 
+/**
+ * Rotary potentiometer input (edge-triggered)
+ */
 void handleRotaryPot() {
   int rotaryValue = analogRead(ROTARY_POT_PIN);
-  
+
   if (rotaryValue > ROTARY_THRESHOLD && !rotaryTriggered) {
-    score++;
     rotaryTriggered = true;
-    
+
     digitalWrite(LED1, HIGH);
     delay(100);
     digitalWrite(LED1, LOW);
-    
-    displayScore();
-    playScoreSound();
-    
-    Serial.print(F("Rotary Pot: "));
-    Serial.println(score);
-  } 
+
+    incrementScore(F("Rotary pot triggered!"));
+    Serial.print(F("  Rotary value: "));
+    Serial.println(rotaryValue);
+  }
   else if (rotaryValue <= ROTARY_THRESHOLD) {
     rotaryTriggered = false;
   }
 }
 
-void handleSlidePot() {
-  int slideValue = analogRead(SLIDE_POT_PIN);
-  
-  if (slideValue > SLIDE_THRESHOLD && !slideTriggered) {
-    score++;
-    slideTriggered = true;
-    
+/**
+ * Linear potentiometer input (edge-triggered)
+ */
+void handleLinearPot() {
+  int linearValue = analogRead(LINEAR_POT_PIN);
+
+  if (linearValue > LINEAR_THRESHOLD && !linearTriggered) {
+    linearTriggered = true;
+
     digitalWrite(LED2, HIGH);
     delay(100);
     digitalWrite(LED2, LOW);
-    
-    displayScore();
-    playScoreSound();
-    
-    Serial.print(F("Slide Pot: "));
-    Serial.println(score);
-  } 
-  else if (slideValue <= SLIDE_THRESHOLD) {
-    slideTriggered = false;
+
+    incrementScore(F("Linear pot triggered!"));
+    Serial.print(F("  Linear value: "));
+    Serial.println(linearValue);
   }
-}
-
-void displayScore() {
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Score:");
-  lcd.setCursor(0, 1);
-  lcd.print(score);
-}
-
-void playScoreSound() {
-  if (!dfPlayerReady) return;
-  
-  unsigned long currentTime = millis();
-  if (currentTime - lastAudioTime < AUDIO_COOLDOWN) return;
-  lastAudioTime = currentTime;
-  
-  myDFPlayer.play(1);  // Plays 0001.mp3
-}
-
-void printDFPlayerDetail(uint8_t type, int value) {
-  switch (type) {
-    case TimeOut:
-      Serial.println(F("DFPlayer: Time Out!"));
-      break;
-    case DFPlayerCardRemoved:
-      Serial.println(F("DFPlayer: Card Removed!"));
-      dfPlayerReady = false;
-      break;
-    case DFPlayerCardOnline:
-      Serial.println(F("DFPlayer: Card Online!"));
-      dfPlayerReady = true;
-      break;
-    case DFPlayerError:
-      Serial.print(F("DFPlayer Error: "));
-      if (value == Busy) {
-        Serial.println(F("Card not found"));
-        dfPlayerReady = false;
-      }
-      break;
+  else if (linearValue <= LINEAR_THRESHOLD) {
+    linearTriggered = false;
   }
 }
