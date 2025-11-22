@@ -4,170 +4,99 @@
 #include <Adafruit_SSD1306.h>
 
 // OLED Display Configuration
-#define SCREEN_WIDTH 128       // OLED display width, in pixels
-#define SCREEN_HEIGHT 32       // OLED display height, in pixels
-#define OLED_RESET     -1      // Reset pin # (or -1 if sharing Arduino reset pin)
-#define SCREEN_ADDRESS 0x3C    // 0x3C for 128x32
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 32
+#define OLED_RESET     -1
+#define SCREEN_ADDRESS 0x3C
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
-// Pin Definitions
-#define POT_PIN 3              // Potentiometer analog input (A3)
-#define SLIDE_PIN 2            // Slide switch analog input (A2)
-#define LED1 8                 // LED 1 output
-#define LED2 7                 // LED 2 output
-#define BUTTON_PIN 2           // Button digital input (with pull-up)
+// Potentiometer Pin Definitions
+#define ROTARY_POT_PIN  A3   // rotary potentiometer on A3
+#define LINEAR_POT_PIN  A2   // linear potentiometer on A2
 
 // Threshold values for analog inputs
-#define POT_THRESHOLD 300      // Potentiometer threshold
-#define SLIDE_THRESHOLD 200    // Slide switch threshold
+#define ROTARY_THRESHOLD 300
+#define LINEAR_THRESHOLD 200
 
-// Debouncing
-#define DEBOUNCE_DELAY 20      // Debounce time in milliseconds
-
-// Button state variables
-int buttonState;               // Current reading from the button
-int lastButtonState = HIGH;    // Previous reading from the button
-unsigned long lastDebounceTime = 0;  // Last time the button state changed
-
-// Analog input state tracking
-bool potTriggered = false;     // Track if pot already triggered
-bool slideTriggered = false;   // Track if slide already triggered
+// Analog input edge-trigger tracking
+bool rotaryTriggered = false;
+bool linearTriggered = false;
 
 // Score variable
-int score = 0;                 // Total score counter
+int score = 0;
 
 void setup() {
   Serial.begin(9600);
-  
-  // Configure digital pins
-  pinMode(LED1, OUTPUT);
-  pinMode(LED2, OUTPUT);
-  pinMode(BUTTON_PIN, INPUT_PULLUP);
-  
-  // Configure analog pins (INPUT is default, but explicit is clearer)
-  pinMode(POT_PIN, INPUT);
-  pinMode(SLIDE_PIN, INPUT);
-  
+
+  // Analog pins are inputs by default, but explicit is fine
+  pinMode(ROTARY_POT_PIN, INPUT);
+  pinMode(LINEAR_POT_PIN, INPUT);
+
   // Initialize I2C communication
   Wire.begin();
-  
+
   // Initialize OLED display
-  if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
+  if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
     Serial.println(F("SSD1306 allocation failed"));
-    for(;;); // Don't proceed, loop forever
+    for(;;);
   }
-  
-  // Clear the display
+
   display.clearDisplay();
-  
-  // Display initial score
   displayScore();
-  
-  Serial.println(F("Combined Score Counter Initialized"));
+
+  Serial.println(F("Potentiometer Score Counter Initialized"));
   Serial.println(F("Score: 0"));
 }
 
 void loop() {
-  // ===== Handle Button Input =====
-  handleButton();
-  
-  // ===== Handle Potentiometer Input =====
-  handlePotentiometer();
-  
-  // ===== Handle Slide Switch Input =====
-  handleSlideSwitch();
+  handleRotaryPot();
+  handleLinearPot();
 }
 
 /**
- * Handle button press with debouncing
+ * Handle rotary potentiometer input
+ * Increments score once per threshold crossing.
  */
-void handleButton() {
-  // Read the button state
-  int reading = digitalRead(BUTTON_PIN);
-  
-  // Check if button state changed (for debouncing)
-  if (reading != lastButtonState) {
-    lastDebounceTime = millis();
-  }
-  
-  // Only register button press after debounce delay
-  if ((millis() - lastDebounceTime) > DEBOUNCE_DELAY) {
-    // If the button state has changed
-    if (reading != buttonState) {
-      buttonState = reading;
-      
-      // Button pressed (LOW because of pull-up resistor)
-      if (buttonState == LOW) {
-        score++;  // Increment score
-        displayScore();  // Update display
-        
-        Serial.print(F("Button pressed! Score: "));
-        Serial.println(score);
-      }
-    }
-  }
-  
-  lastButtonState = reading;
-}
+void handleRotaryPot() {
+  int rotaryValue = analogRead(ROTARY_POT_PIN);
 
-/**
- * Handle potentiometer input
- */
-void handlePotentiometer() {
-  int potValue = analogRead(POT_PIN);
-  
-  if (potValue > POT_THRESHOLD && !potTriggered) {
-    // Potentiometer exceeded threshold
+  if (rotaryValue > ROTARY_THRESHOLD && !rotaryTriggered) {
     score++;
-    potTriggered = true;  // Set flag to prevent multiple counts
-    
-    // Blink LED1
-    digitalWrite(LED1, HIGH);
-    delay(100);
-    digitalWrite(LED1, LOW);
-    
-    // Update display
+    rotaryTriggered = true;
+
     displayScore();
-    
-    Serial.print(F("Potentiometer triggered! Value: "));
-    Serial.print(potValue);
+
+    Serial.print(F("Rotary pot triggered! Value: "));
+    Serial.print(rotaryValue);
     Serial.print(F(", Score: "));
     Serial.println(score);
-  } 
-  else if (potValue <= POT_THRESHOLD) {
-    // Reset trigger flag when potentiometer goes below threshold
-    potTriggered = false;
+  }
+  else if (rotaryValue <= ROTARY_THRESHOLD) {
+    rotaryTriggered = false; // reset when back below threshold
   }
 }
 
 /**
- * Handle slide switch input
+ * Handle linear potentiometer input
+ * Increments score once per threshold crossing.
  */
-void handleSlideSwitch() {
-  int slideValue = analogRead(SLIDE_PIN);
-  
-  if (slideValue > SLIDE_THRESHOLD && !slideTriggered) {
-    // Slide switch exceeded threshold
+void handleLinearPot() {
+  int linearValue = analogRead(LINEAR_POT_PIN);
+
+  if (linearValue > LINEAR_THRESHOLD && !linearTriggered) {
     score++;
-    slideTriggered = true;  // Set flag to prevent multiple counts
-    
-    // Blink LED2
-    digitalWrite(LED2, HIGH);
-    delay(100);
-    digitalWrite(LED2, LOW);
-    
-    // Update display
+    linearTriggered = true;
+
     displayScore();
-    
-    Serial.print(F("Slide switch triggered! Value: "));
-    Serial.print(slideValue);
+
+    Serial.print(F("Linear pot triggered! Value: "));
+    Serial.print(linearValue);
     Serial.print(F(", Score: "));
     Serial.println(score);
-  } 
-  else if (slideValue <= SLIDE_THRESHOLD) {
-    // Reset trigger flag when slide switch goes below threshold
-    slideTriggered = false;
+  }
+  else if (linearValue <= LINEAR_THRESHOLD) {
+    linearTriggered = false; // reset when back below threshold
   }
 }
 
@@ -176,20 +105,15 @@ void handleSlideSwitch() {
  */
 void displayScore() {
   display.clearDisplay();
-  
-  // Set text properties
+
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 0);
-  
-  // Display "Score:" label
   display.println(F("Score:"));
-  
-  // Display the actual score in larger text
+
   display.setTextSize(2);
   display.setCursor(0, 12);
   display.print(score);
-  
-  // Update the display
+
   display.display();
 }
