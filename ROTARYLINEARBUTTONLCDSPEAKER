@@ -22,9 +22,12 @@
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 // ================= INPUTS / OUTPUTS =================
-// Potentiometers (explicit analog pins)
+// Potentiometers
 #define ROTARY_POT_PIN  A3   // rotary potentiometer on A3
 #define LINEAR_POT_PIN  A2   // linear potentiometer on A2
+
+// Button
+#define BUTTON_PIN 2         // digital button on D2 (with INPUT_PULLUP)
 
 // LEDs
 #define LED1 8               // LED for rotary pot trigger
@@ -34,9 +37,18 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 #define ROTARY_THRESHOLD 300
 #define LINEAR_THRESHOLD 200
 
-// Edge-detect flags
+// Debounce
+#define DEBOUNCE_DELAY 20
+
+// ================= STATE =================
+// Edge-detect flags for pots
 bool rotaryTriggered = false;
 bool linearTriggered = false;
+
+// Button debounce state
+int buttonState = HIGH;
+int lastButtonState = HIGH;
+unsigned long lastDebounceTime = 0;
 
 // Score
 int score = 0;
@@ -64,10 +76,20 @@ void displayScore() {
   display.display();
 }
 
+// Centralized score increment
+void incrementScore(const __FlashStringHelper* source) {
+  score++;
+  displayScore();
+
+  Serial.print(source);
+  Serial.print(F(" Score: "));
+  Serial.println(score);
+}
+
 void setup() {
   Serial.begin(115200);
   Serial.println();
-  Serial.println(F("Booting Pots + LEDs + OLED + DFPlayer..."));
+  Serial.println(F("Booting Button + Pots + LEDs + OLED + DFPlayer..."));
 
   // LEDs
   pinMode(LED1, OUTPUT);
@@ -76,6 +98,9 @@ void setup() {
   // Pots
   pinMode(ROTARY_POT_PIN, INPUT);
   pinMode(LINEAR_POT_PIN, INPUT);
+
+  // Button
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
 
   // I2C + OLED init
   Wire.begin();
@@ -101,13 +126,13 @@ void setup() {
 
   myDFPlayer.volume(20);  // 0–30
   myDFPlayer.play(1);     // start with first mp3
-
   musicTimer = millis();
 
   Serial.println(F("Setup complete. Score = 0"));
 }
 
 void loop() {
+  handleButton();
   handleRotaryPot();
   handleLinearPot();
 
@@ -120,13 +145,35 @@ void loop() {
 }
 
 /**
+ * Handle button press with debouncing
+ */
+void handleButton() {
+  int reading = digitalRead(BUTTON_PIN);
+
+  if (reading != lastButtonState) {
+    lastDebounceTime = millis();
+  }
+
+  if ((millis() - lastDebounceTime) > DEBOUNCE_DELAY) {
+    if (reading != buttonState) {
+      buttonState = reading;
+
+      if (buttonState == LOW) {
+        incrementScore(F("Button pressed!"));
+      }
+    }
+  }
+
+  lastButtonState = reading;
+}
+
+/**
  * Handle rotary potentiometer input
  */
 void handleRotaryPot() {
   int rotaryValue = analogRead(ROTARY_POT_PIN);
 
   if (rotaryValue > ROTARY_THRESHOLD && !rotaryTriggered) {
-    score++;
     rotaryTriggered = true;
 
     // Blink LED1
@@ -134,12 +181,10 @@ void handleRotaryPot() {
     delay(100);
     digitalWrite(LED1, LOW);
 
-    displayScore();
+    incrementScore(F("Rotary pot triggered!"));
 
-    Serial.print(F("Rotary pot triggered! Value: "));
-    Serial.print(rotaryValue);
-    Serial.print(F(", Score: "));
-    Serial.println(score);
+    Serial.print(F("  Rotary value: "));
+    Serial.println(rotaryValue);
   }
   else if (rotaryValue <= ROTARY_THRESHOLD) {
     rotaryTriggered = false;
@@ -153,7 +198,6 @@ void handleLinearPot() {
   int linearValue = analogRead(LINEAR_POT_PIN);
 
   if (linearValue > LINEAR_THRESHOLD && !linearTriggered) {
-    score++;
     linearTriggered = true;
 
     // Blink LED2
@@ -161,12 +205,10 @@ void handleLinearPot() {
     delay(100);
     digitalWrite(LED2, LOW);
 
-    displayScore();
+    incrementScore(F("Linear pot triggered!"));
 
-    Serial.print(F("Linear pot triggered! Value: "));
-    Serial.print(linearValue);
-    Serial.print(F(", Score: "));
-    Serial.println(score);
+    Serial.print(F("  Linear value: "));
+    Serial.println(linearValue);
   }
   else if (linearValue <= LINEAR_THRESHOLD) {
     linearTriggered = false;
