@@ -29,7 +29,7 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 // Score button (increments score)
 #define BUTTON_PIN 2   // D2 / PD2
 
-// START button (must be pressed to begin)
+// START button (toggle start/pause/resume)
 #define START_BUTTON_PIN 4   // D4 / PD4 / physical pin 6
 
 // LEDs
@@ -45,7 +45,8 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 // ================= STATE =================
 // Game state
-bool gameStarted = false;
+bool gameRunning = false;     // true = inputs active
+bool gameInitialized = false; // becomes true after the first START press
 
 // Edge-detect flags for pots
 bool rotaryTriggered = false;
@@ -96,6 +97,16 @@ void displayPressStart() {
   display.display();
 }
 
+void displayPaused() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.println(F("Paused"));
+  display.println(F("Press START"));
+  display.display();
+}
+
 // Centralized score increment
 void incrementScore(const __FlashStringHelper* source) {
   score++;
@@ -109,7 +120,7 @@ void incrementScore(const __FlashStringHelper* source) {
 void setup() {
   Serial.begin(115200);
   Serial.println();
-  Serial.println(F("Booting Start+Button+Pots+LEDs+OLED+DFPlayer..."));
+  Serial.println(F("Booting Start-toggle + Button + Pots + LEDs + OLED + DFPlayer..."));
 
   // LEDs
   pinMode(LED1, OUTPUT);
@@ -146,7 +157,6 @@ void setup() {
   }
 
   myDFPlayer.volume(20);  // 0–30
-
   Serial.println(F("Waiting for START button..."));
 }
 
@@ -154,15 +164,15 @@ void loop() {
   // Always check START button
   handleStartButton();
 
-  // If game not started yet, ignore everything else
-  if (!gameStarted) return;
+  // If game is paused/not started, ignore scoring inputs
+  if (!gameRunning) return;
 
   // Game inputs
   handleScoreButton();
   handleRotaryPot();
   handleLinearPot();
 
-  // DFPlayer auto-next only after game starts
+  // DFPlayer auto-next only while running
   if (millis() - musicTimer > MUSIC_INTERVAL) {
     musicTimer = millis();
     myDFPlayer.next();
@@ -172,7 +182,8 @@ void loop() {
 
 /**
  * START button handler (debounced)
- * Pressing START begins the game.
+ * 1st press: start game (reset score)
+ * later presses: toggle pause/resume
  */
 void handleStartButton() {
   int reading = digitalRead(START_BUTTON_PIN);
@@ -185,21 +196,38 @@ void handleStartButton() {
     if (reading != startButtonState) {
       startButtonState = reading;
 
-      if (startButtonState == LOW && !gameStarted) {
-        gameStarted = true;
+      if (startButtonState == LOW) {
+        // FIRST TIME: initialize and start
+        if (!gameInitialized) {
+          gameInitialized = true;
+          gameRunning = true;
 
-        // Reset game state
-        score = 0;
-        rotaryTriggered = false;
-        linearTriggered = false;
+          score = 0;
+          rotaryTriggered = false;
+          linearTriggered = false;
 
-        displayScore();
+          displayScore();
 
-        // Start music now
-        myDFPlayer.play(1);
-        musicTimer = millis();
+          myDFPlayer.play(1);
+          musicTimer = millis();
 
-        Serial.println(F("START pressed — game begun!"));
+          Serial.println(F("START pressed — game begun!"));
+        }
+        // TOGGLE: pause/resume
+        else {
+          gameRunning = !gameRunning;
+
+          if (!gameRunning) {
+            myDFPlayer.pause();
+            displayPaused();
+            Serial.println(F("Game paused."));
+          } else {
+            myDFPlayer.start();   // resume current track
+            musicTimer = millis(); // reset auto-next interval
+            displayScore();
+            Serial.println(F("Game resumed."));
+          }
+        }
       }
     }
   }
