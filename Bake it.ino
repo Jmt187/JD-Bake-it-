@@ -54,6 +54,13 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 // Debounce
 #define DEBOUNCE_DELAY 20
 
+// ===== Timing fixes =====
+const unsigned long DFPLAYER_READY_DELAY_MS = 1200; // lets DFPlayer finish reset/SD init
+const unsigned long INTRO_DELAY_MS         = 3000; // adjust to the length of "welcome to bake it!"
+const unsigned long INPUT_GRACE_MS         = 200;  // ignore inputs briefly after START/resume
+
+unsigned long inputsEnableTime = 0;
+
 // ================= STATE =================
 // Game state
 bool gameRunning = false;     // true = inputs active
@@ -124,6 +131,24 @@ void incrementScore(const __FlashStringHelper* source) {
   Serial.println(score);
 }
 
+// Sync inputs so nothing "ghost triggers" right when game starts/resumes
+void armInputs() {
+  // Score button: set states to current reading so it can’t count immediately
+  int b = digitalRead(BUTTON_PIN);
+  buttonState = b;
+  lastButtonState = b;
+  lastDebounceTime = millis();
+
+  // Pots: mark "triggered" if currently above threshold so they don’t score instantly
+  rotaryTriggered = (analogRead(ROTARY_POT_PIN) > ROTARY_THRESHOLD);
+  linearTriggered = (analogRead(LINEAR_POT_PIN) > LINEAR_THRESHOLD);
+}
+
+bool handleStartButton();
+void handleScoreButton();
+void handleRotaryPot();
+void handleLinearPot();
+
 void setup() {
   Serial.begin(115200);
   Serial.println();
@@ -165,57 +190,70 @@ void setup() {
 
   myDFPlayer.volume(20);  // 0–30
 
-  // ✅ Play ONLY 0001.mp3 (track 1) immediately on boot (before START)
+  // ✅ IMPORTANT: give DFPlayer time after reset to be ready
+  delay(DFPLAYER_READY_DELAY_MS);
+
+  // ✅ Play ONLY 0001.mp3 (track 1) immediately on boot
   myDFPlayer.play(1);
   Serial.println(F("Boot audio: playing track 1 (0001.mp3)."));
+
+  // ✅ Delay after starting the intro so nothing can accidentally interrupt it
+  delay(INTRO_DELAY_MS);
 
   Serial.println(F("Waiting for START button..."));
 }
 
 void loop() {
-  // Always check START button
-  handleStartButton();
+  // If a START event occurred, stop this loop cycle so it can’t trigger score inputs
+  if (handleStartButton()) return;
 
   // If game is paused/not started, ignore scoring inputs
   if (!gameRunning) return;
+
+  // Brief grace period after starting/resuming to avoid ghost presses
+  if (millis() < inputsEnableTime) return;
 
   // Game inputs
   handleScoreButton();
   handleRotaryPot();
   handleLinearPot();
-
-  // ✅ No auto-next / no other track logic
 }
 
 /**
  * START button handler (debounced)
  * 1st press: start game (reset score)
  * later presses: toggle pause/resume
+ *
+ * Returns true if a START press event was handled this loop cycle.
  */
-void handleStartButton() {
+bool handleStartButton() {
   int reading = digitalRead(START_BUTTON_PIN);
 
   if (reading != lastStartButtonState) {
     lastStartDebounceTime = millis();
   }
 
+  bool handledEvent = false;
+
   if ((millis() - lastStartDebounceTime) > DEBOUNCE_DELAY) {
     if (reading != startButtonState) {
       startButtonState = reading;
 
       if (startButtonState == LOW) {
+        handledEvent = true;
+
         // FIRST TIME: initialize and start
         if (!gameInitialized) {
           gameInitialized = true;
           gameRunning = true;
 
           score = 0;
-          rotaryTriggered = false;
-          linearTriggered = false;
+
+          // Arm inputs to prevent instant score increment
+          armInputs();
+          inputsEnableTime = millis() + INPUT_GRACE_MS;
 
           displayScore();
-
-          // ✅ Do NOT start any track here (boot already started 0001.mp3)
           Serial.println(F("START pressed — game begun!"));
         }
         // TOGGLE: pause/resume
@@ -227,7 +265,9 @@ void handleStartButton() {
             displayPaused();
             Serial.println(F("Game paused."));
           } else {
-            myDFPlayer.start();   // resume current (still only track 1)
+            myDFPlayer.start();   // resume current track (still only track 1)
+            armInputs();
+            inputsEnableTime = millis() + INPUT_GRACE_MS;
             displayScore();
             Serial.println(F("Game resumed."));
           }
@@ -237,6 +277,7 @@ void handleStartButton() {
   }
 
   lastStartButtonState = reading;
+  return handledEvent;
 }
 
 /**
