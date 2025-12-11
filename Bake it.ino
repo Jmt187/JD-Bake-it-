@@ -1,26 +1,35 @@
 /*
  * BAKE IT! - Junior Design Project
  * A Bop-it style game with baking theme for ATmega328P
- * 
- * Game Inputs:
- * - Mix it! -> Rotary potentiometer (turn the knob)
- * - Cut it! -> Slide potentiometer (slide the slider)
- * - Cook it! -> Push button (press the button)
- * 
+ *
+ * Audio files:
+ * 0001.mp3 = intro ("welcome to bake it!")  [played once on boot]
+ * 0002.mp3 = "cut it!"
+ * 0003.mp3 = "mix it!"
+ * 0004.mp3 = "cook it!"
+ * 0005.mp3 = lose sound
+ *
+ * Inputs:
+ * - CUT IT  -> Linear potentiometer (A2)  [movement-based trigger]
+ * - MIX IT  -> Rotary potentiometer (A3)  [movement-based trigger]
+ * - COOK IT -> Push button (D2)           [press trigger]
+ *
+ * START button (D4):
+ * - First press starts the run
+ * - Later presses pause/resume
  */
 
 #include "Arduino.h"
 #include "DFRobotDFPlayerMini.h"
 
-#if (defined(ARDUINO_AVR_UNO) || defined(ESP8266))   // Using a soft serial port
+#if (defined(ARDUINO_AVR_UNO) || defined(ESP8266))
   #include <SoftwareSerial.h>
-  SoftwareSerial softSerial(/*rx =*/9, /*tx =*/10);
+  SoftwareSerial softSerial(/*rx=*/9, /*tx=*/10);
   #define FPSerial softSerial
 #else
   #define FPSerial Serial1
 #endif
 
-#include <SPI.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
@@ -32,75 +41,61 @@
 #define SCREEN_ADDRESS 0x3C
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
-// ================= INPUTS / OUTPUTS =================
-// Potentiometers
+// ================= PINS =================
 #define ROTARY_POT_PIN  A3
 #define LINEAR_POT_PIN  A2
 
-// Score button (increments score)
-#define BUTTON_PIN 2   // D2 / PD2
-
-// START button (toggle start/pause/resume)
-#define START_BUTTON_PIN 4   // D4 / PD4 / physical pin 6
-
-// LEDs
-#define LED1 8
-#define LED2 7
-
-// Thresholds
-#define ROTARY_THRESHOLD 300
-#define LINEAR_THRESHOLD 200
-
-// Debounce
-#define DEBOUNCE_DELAY 20
-
-// ===== Timing fixes =====
-const unsigned long DFPLAYER_READY_DELAY_MS = 1200; // lets DFPlayer finish reset/SD init
-const unsigned long INTRO_DELAY_MS         = 3000; // adjust to the length of "welcome to bake it!"
-const unsigned long INPUT_GRACE_MS         = 200;  // ignore inputs briefly after START/resume
-
-unsigned long inputsEnableTime = 0;
-
-// ================= STATE =================
-// Game state
-bool gameRunning = false;     // true = inputs active
-bool gameInitialized = false; // becomes true after the first START press
-
-// Edge-detect flags for pots
-bool rotaryTriggered = false;
-bool linearTriggered = false;
-
-// Score button debounce state
-int buttonState = HIGH;
-int lastButtonState = HIGH;
-unsigned long lastDebounceTime = 0;
-
-// START button debounce state
-int startButtonState = HIGH;
-int lastStartButtonState = HIGH;
-unsigned long lastStartDebounceTime = 0;
-
-// Score
-int score = 0;
+#define COOK_BUTTON_PIN 2      // D2 / PD2
+#define START_BUTTON_PIN 4     // D4 / PD4 / physical pin 6
 
 // ================= DFPLAYER =================
 DFRobotDFPlayerMini myDFPlayer;
 
-// ================= OLED FUNCTIONS =================
-void displayScore() {
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  display.println(F("Score:"));
+// ===== Timing fixes =====
+const unsigned long DFPLAYER_READY_DELAY_MS = 1200;
+const unsigned long INTRO_DELAY_MS          = 3000;
 
-  display.setTextSize(2);
-  display.setCursor(0, 12);
-  display.print(score);
+// ================= GAME TIMING (like reference) =================
+int timeDelay = 3000;                 // start at 3.0 seconds
+const int MIN_TIME_DELAY = 500;       // min 0.5 seconds
+const int SPEEDUP_STEP = 200;         // -200ms every 5 rounds
+const int SPEEDUP_EVERY = 5;
 
-  display.display();
-}
+const unsigned long BETWEEN_ROUNDS_MS = 400;  // small breather between prompts
 
+// Pot movement sensitivity (tune if needed)
+const int POT_CHANGE = 120;
+
+// ================= STATE =================
+bool gameRunning = false;
+bool gameInitialized = false;
+
+// Start button debounce
+const unsigned long DEBOUNCE_DELAY = 20;
+int startButtonState = HIGH;
+int lastStartButtonState = HIGH;
+unsigned long lastStartDebounceTime = 0;
+
+// Run stats
+int score = 0;        // equals rounds passed
+int roundsPassed = 0;
+
+// Round state
+bool roundActive = false;
+uint8_t currentPromptTrack = 0;   // 2,3,4
+unsigned long roundDeadline = 0;
+unsigned long nextRoundAt = 0;
+
+// Pause behavior
+bool resumeSamePrompt = false;
+uint8_t pausedPromptTrack = 0;
+
+// Input tracking (movement/edge detection)
+int cookLastState = HIGH;
+int rotaryLastValue = 0;
+int linearLastValue = 0;
+
+// ================= OLED HELPERS =================
 void displayPressStart() {
   display.clearDisplay();
   display.setTextSize(1);
@@ -121,111 +116,160 @@ void displayPaused() {
   display.display();
 }
 
-// Centralized score increment
-void incrementScore(const __FlashStringHelper* source) {
+void displayLose() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.println(F("You lose!"));
+  display.println(F("Press START"));
+  display.display();
+}
+
+void displayScoreOnly() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.print(F("Score: "));
+  display.println(score);
+
+  display.setTextSize(1);
+  display.setCursor(0, 16);
+  display.print(F("Time: "));
+  display.print(timeDelay);
+  display.println(F("ms"));
+
+  display.display();
+}
+
+void displayPrompt(uint8_t track) {
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+
+  // top line: score
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.print(F("Score: "));
+  display.println(score);
+
+  // big prompt
+  display.setTextSize(2);
+  display.setCursor(0, 14);
+  if (track == 2) display.print(F("CUT!"));
+  else if (track == 3) display.print(F("MIX!"));
+  else if (track == 4) display.print(F("COOK!"));
+  else display.print(F("..."));
+
+  display.display();
+}
+
+// ================= INPUT SYNC =================
+void syncInputsForRound() {
+  cookLastState = digitalRead(COOK_BUTTON_PIN);
+  rotaryLastValue = analogRead(ROTARY_POT_PIN);
+  linearLastValue = analogRead(LINEAR_POT_PIN);
+}
+
+// ================= INPUT CHECKERS =================
+bool cookPressed() {
+  int cur = digitalRead(COOK_BUTTON_PIN);
+  bool pressed = (cookLastState == HIGH && cur == LOW);
+  cookLastState = cur;
+  return pressed;
+}
+
+bool rotaryTurned() {
+  int cur = analogRead(ROTARY_POT_PIN);
+  if (abs(cur - rotaryLastValue) > POT_CHANGE) {
+    rotaryLastValue = cur;
+    return true;
+  }
+  return false;
+}
+
+bool linearSlid() {
+  int cur = analogRead(LINEAR_POT_PIN);
+  if (abs(cur - linearLastValue) > POT_CHANGE) {
+    linearLastValue = cur;
+    return true;
+  }
+  return false;
+}
+
+bool correctInputForPrompt(uint8_t promptTrack) {
+  switch (promptTrack) {
+    case 2: return linearSlid();   // CUT
+    case 3: return rotaryTurned(); // MIX
+    case 4: return cookPressed();  // COOK
+    default: return false;
+  }
+}
+
+// ================= ROUND CONTROL =================
+void startRound(bool replaySame = false) {
+  if (!replaySame) {
+    currentPromptTrack = (uint8_t)random(2, 5); // 2..4
+  }
+  syncInputsForRound();
+  displayPrompt(currentPromptTrack);
+
+  // Play the prompt (0002/0003/0004)
+  myDFPlayer.play(currentPromptTrack);
+
+  roundDeadline = millis() + (unsigned long)timeDelay;
+  roundActive = true;
+
+  Serial.print(F("Prompt track: "));
+  Serial.print(currentPromptTrack);
+  Serial.print(F("  timeDelay="));
+  Serial.println(timeDelay);
+}
+
+void handleCorrect() {
+  myDFPlayer.stop();  // stop prompt audio immediately
+
   score++;
-  displayScore();
+  roundsPassed++;
 
-  Serial.print(source);
-  Serial.print(F(" Score: "));
-  Serial.println(score);
-}
-
-// Sync inputs so nothing "ghost triggers" right when game starts/resumes
-void armInputs() {
-  // Score button: set states to current reading so it can’t count immediately
-  int b = digitalRead(BUTTON_PIN);
-  buttonState = b;
-  lastButtonState = b;
-  lastDebounceTime = millis();
-
-  // Pots: mark "triggered" if currently above threshold so they don’t score instantly
-  rotaryTriggered = (analogRead(ROTARY_POT_PIN) > ROTARY_THRESHOLD);
-  linearTriggered = (analogRead(LINEAR_POT_PIN) > LINEAR_THRESHOLD);
-}
-
-bool handleStartButton();
-void handleScoreButton();
-void handleRotaryPot();
-void handleLinearPot();
-
-void setup() {
-  Serial.begin(115200);
-  Serial.println();
-  Serial.println(F("Booting Start-toggle + Button + Pots + LEDs + OLED + DFPlayer..."));
-
-  // LEDs
-  pinMode(LED1, OUTPUT);
-  pinMode(LED2, OUTPUT);
-
-  // Pots
-  pinMode(ROTARY_POT_PIN, INPUT);
-  pinMode(LINEAR_POT_PIN, INPUT);
-
-  // Buttons
-  pinMode(BUTTON_PIN, INPUT_PULLUP);
-  pinMode(START_BUTTON_PIN, INPUT_PULLUP);
-
-  // I2C + OLED init
-  Wire.begin();
-  if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
-    Serial.println(F("SSD1306 allocation failed"));
-    for(;;);
+  // Speed up every 5 rounds
+  if (roundsPassed > 0 && (roundsPassed % SPEEDUP_EVERY == 0)) {
+    if (timeDelay > MIN_TIME_DELAY) {
+      timeDelay -= SPEEDUP_STEP;
+      if (timeDelay < MIN_TIME_DELAY) timeDelay = MIN_TIME_DELAY;
+    }
   }
 
+  displayScoreOnly();
+
+  roundActive = false;
+  nextRoundAt = millis() + BETWEEN_ROUNDS_MS;
+}
+
+void handleLose() {
+  myDFPlayer.stop();
+  myDFPlayer.play(5);   // 0005.mp3 lose
+  displayLose();
+
+  // Let the lose audio get a head start so it isn't cut off
+  delay(2000);
+
+  // Reset the run
+  timeDelay = 3000;
+  roundsPassed = 0;
+  score = 0;
+
+  roundActive = false;
+  currentPromptTrack = 0;
+
+  gameRunning = false;
+  gameInitialized = false;
+
+  // Wait for START again
   displayPressStart();
-
-  // DFPlayer serial + init
-#if (defined ESP32)
-  FPSerial.begin(9600, SERIAL_8N1, /*rx=*/D3, /*tx=*/D2);
-#else
-  FPSerial.begin(9600);
-#endif
-
-  Serial.println(F("Initializing DFPlayer..."));
-  if (!myDFPlayer.begin(FPSerial, /*isACK=*/true, /*doReset=*/true)) {
-    Serial.println(F("DFPlayer init failed. Check wiring + SD card."));
-    for(;;) { delay(0); }
-  }
-
-  myDFPlayer.volume(20);  // 0–30
-
-  // ✅ IMPORTANT: give DFPlayer time after reset to be ready
-  delay(DFPLAYER_READY_DELAY_MS);
-
-  // ✅ Play ONLY 0001.mp3 (track 1) immediately on boot
-  myDFPlayer.play(1);
-  Serial.println(F("Boot audio: playing track 1 (0001.mp3)."));
-
-  // ✅ Delay after starting the intro so nothing can accidentally interrupt it
-  delay(INTRO_DELAY_MS);
-
-  Serial.println(F("Waiting for START button..."));
 }
 
-void loop() {
-  // If a START event occurred, stop this loop cycle so it can’t trigger score inputs
-  if (handleStartButton()) return;
-
-  // If game is paused/not started, ignore scoring inputs
-  if (!gameRunning) return;
-
-  // Brief grace period after starting/resuming to avoid ghost presses
-  if (millis() < inputsEnableTime) return;
-
-  // Game inputs
-  handleScoreButton();
-  handleRotaryPot();
-  handleLinearPot();
-}
-
-/**
- * START button handler (debounced)
- * 1st press: start game (reset score)
- * later presses: toggle pause/resume
- *
- * Returns true if a START press event was handled this loop cycle.
- */
+// ================= START BUTTON =================
 bool handleStartButton() {
   int reading = digitalRead(START_BUTTON_PIN);
 
@@ -242,34 +286,57 @@ bool handleStartButton() {
       if (startButtonState == LOW) {
         handledEvent = true;
 
-        // FIRST TIME: initialize and start
+        // First time: start fresh run
         if (!gameInitialized) {
           gameInitialized = true;
           gameRunning = true;
 
+          timeDelay = 3000;
+          roundsPassed = 0;
           score = 0;
 
-          // Arm inputs to prevent instant score increment
-          armInputs();
-          inputsEnableTime = millis() + INPUT_GRACE_MS;
+          roundActive = false;
+          currentPromptTrack = 0;
 
-          displayScore();
-          Serial.println(F("START pressed — game begun!"));
+          displayScoreOnly();
+          nextRoundAt = millis();
+
+          Serial.println(F("START: run begun."));
         }
-        // TOGGLE: pause/resume
+        // Toggle pause/resume
         else {
           gameRunning = !gameRunning;
 
           if (!gameRunning) {
+            // Pausing
             myDFPlayer.pause();
             displayPaused();
-            Serial.println(F("Game paused."));
+
+            // If we were mid-round, remember the prompt and replay it on resume
+            if (roundActive && currentPromptTrack >= 2 && currentPromptTrack <= 4) {
+              resumeSamePrompt = true;
+              pausedPromptTrack = currentPromptTrack;
+              roundActive = false;  // prevent timeout while paused
+            } else {
+              resumeSamePrompt = false;
+              pausedPromptTrack = 0;
+            }
+
+            Serial.println(F("Paused."));
           } else {
-            myDFPlayer.start();   // resume current track (still only track 1)
-            armInputs();
-            inputsEnableTime = millis() + INPUT_GRACE_MS;
-            displayScore();
-            Serial.println(F("Game resumed."));
+            // Resuming
+            // We'll replay the same prompt (fresh timer) if we paused mid-round
+            if (resumeSamePrompt && pausedPromptTrack >= 2 && pausedPromptTrack <= 4) {
+              currentPromptTrack = pausedPromptTrack;
+              resumeSamePrompt = false;
+              pausedPromptTrack = 0;
+
+              startRound(true); // replay same prompt, reset timer
+            } else {
+              nextRoundAt = millis(); // start a new round
+            }
+
+            Serial.println(F("Resumed."));
           }
         }
       }
@@ -280,69 +347,72 @@ bool handleStartButton() {
   return handledEvent;
 }
 
-/**
- * Score button press with debouncing
- */
-void handleScoreButton() {
-  int reading = digitalRead(BUTTON_PIN);
+// ================= SETUP / LOOP =================
+void setup() {
+  Serial.begin(115200);
+  Serial.println();
+  Serial.println(F("Booting BAKE IT (round timer + random prompts)..."));
 
-  if (reading != lastButtonState) {
-    lastDebounceTime = millis();
+  pinMode(COOK_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(START_BUTTON_PIN, INPUT_PULLUP);
+
+  Wire.begin();
+  if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
+    Serial.println(F("SSD1306 allocation failed"));
+    for(;;);
   }
 
-  if ((millis() - lastDebounceTime) > DEBOUNCE_DELAY) {
-    if (reading != buttonState) {
-      buttonState = reading;
+  displayPressStart();
 
-      if (buttonState == LOW) {
-        incrementScore(F("Score button pressed!"));
-      }
+  // DFPlayer init
+  FPSerial.begin(9600);
+
+  Serial.println(F("Initializing DFPlayer..."));
+  if (!myDFPlayer.begin(FPSerial, /*isACK=*/true, /*doReset=*/true)) {
+    Serial.println(F("DFPlayer init failed. Check wiring + SD card."));
+    for(;;) { delay(0); }
+  }
+
+  myDFPlayer.volume(15);
+
+  delay(DFPLAYER_READY_DELAY_MS);
+
+  // Play intro once
+  myDFPlayer.play(1); // 0001.mp3
+  Serial.println(F("Intro: playing track 1 (0001.mp3)."));
+  delay(INTRO_DELAY_MS);
+
+  // Seed RNG (use a floating analog pin if possible)
+  randomSeed(analogRead(A1));
+
+  Serial.println(F("Waiting for START..."));
+}
+
+void loop() {
+  // Always allow START to be responsive
+  if (handleStartButton()) return;
+
+  if (!gameRunning) return;
+
+  unsigned long now = millis();
+
+  // If no active round, start one when allowed
+  if (!roundActive) {
+    if (now >= nextRoundAt) {
+      startRound(false);
     }
+    return;
   }
 
-  lastButtonState = reading;
-}
-
-/**
- * Rotary potentiometer input (edge-triggered)
- */
-void handleRotaryPot() {
-  int rotaryValue = analogRead(ROTARY_POT_PIN);
-
-  if (rotaryValue > ROTARY_THRESHOLD && !rotaryTriggered) {
-    rotaryTriggered = true;
-
-    digitalWrite(LED1, HIGH);
-    delay(100);
-    digitalWrite(LED1, LOW);
-
-    incrementScore(F("Rotary pot triggered!"));
-    Serial.print(F("  Rotary value: "));
-    Serial.println(rotaryValue);
+  // Check correct input during the time window
+  if (correctInputForPrompt(currentPromptTrack)) {
+    handleCorrect();
+    return;
   }
-  else if (rotaryValue <= ROTARY_THRESHOLD) {
-    rotaryTriggered = false;
-  }
-}
 
-/**
- * Linear potentiometer input (edge-triggered)
- */
-void handleLinearPot() {
-  int linearValue = analogRead(LINEAR_POT_PIN);
-
-  if (linearValue > LINEAR_THRESHOLD && !linearTriggered) {
-    linearTriggered = true;
-
-    digitalWrite(LED2, HIGH);
-    delay(100);
-    digitalWrite(LED2, LOW);
-
-    incrementScore(F("Linear pot triggered!"));
-    Serial.print(F("  Linear value: "));
-    Serial.println(linearValue);
-  }
-  else if (linearValue <= LINEAR_THRESHOLD) {
-    linearTriggered = false;
+  // Timeout = lose
+  if ((long)(now - roundDeadline) >= 0) {
+    handleLose();
+    return;
   }
 }
