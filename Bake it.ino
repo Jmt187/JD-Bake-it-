@@ -1,9 +1,8 @@
 /*
- * BAKE IT! - Junior Design Project
- * A Bop-it style game with baking theme for ATmega328P
+ * BAKE IT! - Junior Design Project (Bop-it style rounds)
  *
- * Audio files:
- * 0001.mp3 = intro ("welcome to bake it!")  [played once on boot]
+ * Audio files (store in SD:/MP3/):
+ * 0001.mp3 = intro ("welcome to bake it!")
  * 0002.mp3 = "cut it!"
  * 0003.mp3 = "mix it!"
  * 0004.mp3 = "cook it!"
@@ -45,8 +44,8 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 #define ROTARY_POT_PIN  A3
 #define LINEAR_POT_PIN  A2
 
-#define COOK_BUTTON_PIN 2      // D2 / PD2
-#define START_BUTTON_PIN 4     // D4 / PD4 / physical pin 6
+#define COOK_BUTTON_PIN 2
+#define START_BUTTON_PIN 4
 
 // ================= DFPLAYER =================
 DFRobotDFPlayerMini myDFPlayer;
@@ -55,13 +54,13 @@ DFRobotDFPlayerMini myDFPlayer;
 const unsigned long DFPLAYER_READY_DELAY_MS = 1200;
 const unsigned long INTRO_DELAY_MS          = 3000;
 
-// ================= GAME TIMING (like reference) =================
-int timeDelay = 3000;                 // start at 3.0 seconds
-const int MIN_TIME_DELAY = 500;       // min 0.5 seconds
-const int SPEEDUP_STEP = 200;         // -200ms every 5 rounds
+// ================= GAME TIMING =================
+int timeDelay = 3000;
+const int MIN_TIME_DELAY = 500;
+const int SPEEDUP_STEP = 200;
 const int SPEEDUP_EVERY = 5;
 
-const unsigned long BETWEEN_ROUNDS_MS = 400;  // small breather between prompts
+const unsigned long BETWEEN_ROUNDS_MS = 400;
 
 // Pot movement sensitivity (tune if needed)
 const int POT_CHANGE = 120;
@@ -77,7 +76,7 @@ int lastStartButtonState = HIGH;
 unsigned long lastStartDebounceTime = 0;
 
 // Run stats
-int score = 0;        // equals rounds passed
+int score = 0;
 int roundsPassed = 0;
 
 // Round state
@@ -90,10 +89,23 @@ unsigned long nextRoundAt = 0;
 bool resumeSamePrompt = false;
 uint8_t pausedPromptTrack = 0;
 
-// Input tracking (movement/edge detection)
+// Input tracking
 int cookLastState = HIGH;
 int rotaryLastValue = 0;
 int linearLastValue = 0;
+
+// ---------------- DFPlayer helpers ----------------
+// Uses SD:/MP3/000N.mp3 numbering (deterministic)
+void dfStop() {
+  myDFPlayer.stop();
+  delay(60); // DFPlayer needs a beat between commands
+}
+
+void dfPlayMp3(uint16_t n) {
+  dfStop();
+  myDFPlayer.playMp3Folder(n);
+  delay(40); // small spacing helps reliability
+}
 
 // ================= OLED HELPERS =================
 void displayPressStart() {
@@ -147,13 +159,11 @@ void displayPrompt(uint8_t track) {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
 
-  // top line: score
   display.setTextSize(1);
   display.setCursor(0, 0);
   display.print(F("Score: "));
   display.println(score);
 
-  // big prompt
   display.setTextSize(2);
   display.setCursor(0, 14);
   if (track == 2) display.print(F("CUT!"));
@@ -212,10 +222,10 @@ void startRound(bool replaySame = false) {
     currentPromptTrack = (uint8_t)random(2, 5); // 2..4
   }
   syncInputsForRound();
-  displayPrompt(currentPromptTrack);
 
-  // Play the prompt (0002/0003/0004)
-  myDFPlayer.play(currentPromptTrack);
+  // OLED prompt is source-of-truth; audio MUST match it
+  displayPrompt(currentPromptTrack);
+  dfPlayMp3(currentPromptTrack);   // 0002/0003/0004 in /MP3/
 
   roundDeadline = millis() + (unsigned long)timeDelay;
   roundActive = true;
@@ -227,12 +237,11 @@ void startRound(bool replaySame = false) {
 }
 
 void handleCorrect() {
-  myDFPlayer.stop();  // stop prompt audio immediately
+  dfStop();
 
   score++;
   roundsPassed++;
 
-  // Speed up every 5 rounds
   if (roundsPassed > 0 && (roundsPassed % SPEEDUP_EVERY == 0)) {
     if (timeDelay > MIN_TIME_DELAY) {
       timeDelay -= SPEEDUP_STEP;
@@ -247,14 +256,12 @@ void handleCorrect() {
 }
 
 void handleLose() {
-  myDFPlayer.stop();
-  myDFPlayer.play(5);   // 0005.mp3 lose
+  dfStop();
+  dfPlayMp3(5); // lose sound 0005.mp3
   displayLose();
 
-  // Let the lose audio get a head start so it isn't cut off
   delay(2000);
 
-  // Reset the run
   timeDelay = 3000;
   roundsPassed = 0;
   score = 0;
@@ -265,7 +272,6 @@ void handleLose() {
   gameRunning = false;
   gameInitialized = false;
 
-  // Wait for START again
   displayPressStart();
 }
 
@@ -286,7 +292,6 @@ bool handleStartButton() {
       if (startButtonState == LOW) {
         handledEvent = true;
 
-        // First time: start fresh run
         if (!gameInitialized) {
           gameInitialized = true;
           gameRunning = true;
@@ -302,21 +307,17 @@ bool handleStartButton() {
           nextRoundAt = millis();
 
           Serial.println(F("START: run begun."));
-        }
-        // Toggle pause/resume
-        else {
+        } else {
           gameRunning = !gameRunning;
 
           if (!gameRunning) {
-            // Pausing
             myDFPlayer.pause();
             displayPaused();
 
-            // If we were mid-round, remember the prompt and replay it on resume
             if (roundActive && currentPromptTrack >= 2 && currentPromptTrack <= 4) {
               resumeSamePrompt = true;
               pausedPromptTrack = currentPromptTrack;
-              roundActive = false;  // prevent timeout while paused
+              roundActive = false;
             } else {
               resumeSamePrompt = false;
               pausedPromptTrack = 0;
@@ -324,16 +325,15 @@ bool handleStartButton() {
 
             Serial.println(F("Paused."));
           } else {
-            // Resuming
-            // We'll replay the same prompt (fresh timer) if we paused mid-round
+            // Resume by replaying prompt with a fresh timer (keeps it fair + consistent)
             if (resumeSamePrompt && pausedPromptTrack >= 2 && pausedPromptTrack <= 4) {
               currentPromptTrack = pausedPromptTrack;
               resumeSamePrompt = false;
               pausedPromptTrack = 0;
 
-              startRound(true); // replay same prompt, reset timer
+              startRound(true);
             } else {
-              nextRoundAt = millis(); // start a new round
+              nextRoundAt = millis();
             }
 
             Serial.println(F("Resumed."));
@@ -351,7 +351,7 @@ bool handleStartButton() {
 void setup() {
   Serial.begin(115200);
   Serial.println();
-  Serial.println(F("Booting BAKE IT (round timer + random prompts)..."));
+  Serial.println(F("Booting BAKE IT (audio mapped to OLED prompts)..."));
 
   pinMode(COOK_BUTTON_PIN, INPUT_PULLUP);
   pinMode(START_BUTTON_PIN, INPUT_PULLUP);
@@ -364,7 +364,6 @@ void setup() {
 
   displayPressStart();
 
-  // DFPlayer init
   FPSerial.begin(9600);
 
   Serial.println(F("Initializing DFPlayer..."));
@@ -374,29 +373,24 @@ void setup() {
   }
 
   myDFPlayer.volume(15);
-
   delay(DFPLAYER_READY_DELAY_MS);
 
-  // Play intro once
-  myDFPlayer.play(1); // 0001.mp3
-  Serial.println(F("Intro: playing track 1 (0001.mp3)."));
+  // Intro (0001.mp3 in /MP3/)
+  dfPlayMp3(1);
+  Serial.println(F("Intro: playing /MP3/0001.mp3"));
   delay(INTRO_DELAY_MS);
 
-  // Seed RNG (use a floating analog pin if possible)
   randomSeed(analogRead(A1));
 
   Serial.println(F("Waiting for START..."));
 }
 
 void loop() {
-  // Always allow START to be responsive
   if (handleStartButton()) return;
-
   if (!gameRunning) return;
 
   unsigned long now = millis();
 
-  // If no active round, start one when allowed
   if (!roundActive) {
     if (now >= nextRoundAt) {
       startRound(false);
@@ -404,13 +398,11 @@ void loop() {
     return;
   }
 
-  // Check correct input during the time window
   if (correctInputForPrompt(currentPromptTrack)) {
     handleCorrect();
     return;
   }
 
-  // Timeout = lose
   if ((long)(now - roundDeadline) >= 0) {
     handleLose();
     return;
